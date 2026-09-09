@@ -1,0 +1,1 @@
+# xtb-stock-analyzer
