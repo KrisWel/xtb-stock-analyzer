@@ -16,6 +16,9 @@ RAW_DIR = DATA_DIR / "raw"
 SNAPSHOT_CSV = DATA_DIR / "instruments.csv"
 SNAPSHOT_META = DATA_DIR / "instruments.meta.json"
 
+#: Stage 2 identity map — symbol -> external tickers/ISIN.
+IDENTITY_MAP_CSV = DATA_DIR / "identity_map.csv"
+
 WS_URLS = {
     "demo": "wss://ws.xtb.com/demo",
     "real": "wss://ws.xtb.com/real",
@@ -42,9 +45,14 @@ class Credentials:
             ) from exc
 
 
+def load_env(env_file: Path | None = None) -> None:
+    """Seed ``os.environ`` from ``.env`` without requiring XTB credentials to be set."""
+    load_dotenv(env_file or PROJECT_ROOT / ".env", override=False)
+
+
 def load_credentials(env_file: Path | None = None) -> Credentials:
     """Read XTB credentials from the environment (optionally seeded from a .env file)."""
-    load_dotenv(env_file or PROJECT_ROOT / ".env", override=False)
+    load_env(env_file)
 
     user_id = os.getenv("XTB_USER_ID", "").strip()
     password = os.getenv("XTB_PASSWORD", "").strip()

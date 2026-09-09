@@ -4,11 +4,10 @@ Building blocks for a personal tool that tracks every instrument available on an
 **XTB** account and — later — scores each ticker as **buy / sell / hold** based on
 company fundamentals, history and technical indicators.
 
-> **Status: stage 1 of the roadmap.** Right now the project does one thing well:
-> it downloads the full XTB instrument universe and reduces it to **cash equities
-> and ETFs/ETNs only**. Derivatives (stock CFDs, index CFDs, FX, commodities,
-> crypto) are deliberately excluded — the analysis layer is meant for companies
-> and funds, not leveraged contracts.
+> **Status: stage 2 of the roadmap.** The project downloads the full XTB instrument
+> universe and reduces it to **cash equities and ETFs/ETNs only** (derivatives —
+> stock CFDs, index CFDs, FX, commodities, crypto — are deliberately excluded), then
+> maps each surviving symbol onto a Yahoo Finance ticker and, optionally, an ISIN.
 
 ---
 
@@ -73,6 +72,10 @@ xtb-analyzer fetch --from-raw data/raw/all_symbols.json
 
 # keep the CFD rows too (debugging only)
 xtb-analyzer fetch --keep-cfd
+
+# stage 2: map the snapshot onto external tickers/ISIN
+xtb-analyzer map                      # offline: adds the Yahoo Finance ticker per symbol
+xtb-analyzer map --isin               # also resolves ISINs via OpenFIGI (network, unverified)
 ```
 
 Sample output:
@@ -89,6 +92,21 @@ by asset class: ETF=1, STOCK=2
 by market:      US=1, PL=1, DE=1
 ```
 
+## Identity mapping (stage 2)
+
+`getAllSymbols` never returns an ISIN, and every data provider suffixes tickers
+differently, so mapping is split in two:
+
+* **External tickers** — `xtb_analyzer/identity.py` reshapes `TICKER.MARKET` into the
+  suffix Yahoo Finance expects (`CDR.PL` → `CDR.WA`, `IUSQ.DE` → `IUSQ.DE`, ...). Pure,
+  offline, deterministic — no network involved.
+* **ISIN** — `xtb_analyzer/openfigi.py` optionally resolves ISINs through the
+  [OpenFIGI](https://www.openfigi.com/api) mapping API (`--isin`). Its market →
+  exchange-code table is assembled from public references and **not yet verified**
+  against a live snapshot — check a few known tickers before trusting a market's
+  mapping blindly, the same discipline as the open questions in
+  `docs/xtb-api-notes.md`.
+
 ## Outputs
 
 | Path | Committed | Contents |
@@ -96,6 +114,7 @@ by market:      US=1, PL=1, DE=1
 | `data/raw/all_symbols.json` | no (git-ignored) | untouched `getAllSymbols` payload |
 | `data/instruments.csv` | yes | the filtered universe — the offline fallback source |
 | `data/instruments.meta.json` | yes | fetch timestamp, counts, rejection breakdown |
+| `data/identity_map.csv` | yes | symbol -> Yahoo Finance ticker, and ISIN when `--isin` was used |
 
 `data/instruments.csv` doubles as the **fallback**: `xtb-analyzer show` and any later
 analysis step can run from it with no XTB login at all. Commit it after each refresh
@@ -109,8 +128,10 @@ src/xtb_analyzer/
   xtb_client.py  minimal xAPI WebSocket client (login / getAllSymbols / logout)
   models.py      Instrument dataclass, symbol parsing (ticker + market)
   filters.py     cash-equity/ETF rules with per-rule rejection reasons
-  storage.py     CSV snapshot, metadata, raw dump I/O
-  cli.py         fetch / inspect / show
+  identity.py    stage 2: offline symbol -> Yahoo Finance ticker mapping
+  openfigi.py    stage 2: optional ISIN lookup via the OpenFIGI API (network)
+  storage.py     CSV snapshot, identity map, metadata, raw dump I/O
+  cli.py         fetch / inspect / show / map
 tests/           pytest suite driven by a fixture payload — runs without an XTB account
 docs/            API notes and progress log
 ```
@@ -118,7 +139,7 @@ docs/            API notes and progress log
 ## Development
 
 ```bash
-pytest            # 27 tests, no network or credentials required
+pytest            # 43 tests, no network or credentials required
 ruff check .
 ruff format .
 ```
@@ -128,7 +149,7 @@ CI runs the same three commands on every push and pull request.
 ## Roadmap
 
 - [x] **1. Instrument universe** — fetch, filter to cash stocks + ETFs/ETNs, snapshot
-- [ ] **2. Identity mapping** — map XTB symbols to ISIN / external data-provider tickers
+- [x] **2. Identity mapping** — map XTB symbols to ISIN / external data-provider tickers
 - [ ] **3. Market data** — OHLCV history per instrument, incremental refresh, local store
 - [ ] **4. Fundamentals** — valuation, profitability, growth, balance-sheet metrics
 - [ ] **5. Technicals** — trend, momentum, volatility indicators
