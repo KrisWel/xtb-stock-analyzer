@@ -59,3 +59,31 @@ def test_inspect_from_raw(sample_records_path, capsys):
     stdout = capsys.readouterr().out
     assert "11 raw records" in stdout
     assert "== categoryName" in stdout
+
+
+def test_map_writes_identity_csv_without_network(tmp_path, sample_records_path, capsys):
+    snapshot = tmp_path / "instruments.csv"
+    main(
+        [
+            "fetch",
+            "--from-raw",
+            str(sample_records_path),
+            "--output",
+            str(snapshot),
+            "--metadata",
+            str(tmp_path / "m.json"),
+        ]
+    )
+    capsys.readouterr()
+
+    out = tmp_path / "identity_map.csv"
+    exit_code = main(["map", "--snapshot", str(snapshot), "--output", str(out)])
+
+    assert exit_code == 0
+    assert out.exists()
+    rows = out.read_text(encoding="utf-8").splitlines()
+    assert rows[0] == "symbol,ticker,market,currency,yahoo_symbol,isin"
+    assert any(row.startswith("CDR.PL,CDR,PL,PLN,CDR.WA,") for row in rows[1:])
+    stdout = capsys.readouterr().out
+    assert "3 instruments mapped" in stdout
+    assert "isin:         0" in stdout

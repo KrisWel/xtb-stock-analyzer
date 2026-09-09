@@ -4,15 +4,33 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .config import RAW_DIR, SNAPSHOT_CSV, SNAPSHOT_META, ConfigError, load_credentials
+from .config import (
+    IDENTITY_MAP_CSV,
+    RAW_DIR,
+    SNAPSHOT_CSV,
+    SNAPSHOT_META,
+    ConfigError,
+    load_credentials,
+    load_env,
+)
 from .filters import FilterConfig, describe_universe, filter_instruments
-from .storage import read_raw, read_snapshot, write_metadata, write_raw, write_snapshot
+from .identity import map_instruments
+from .openfigi import OpenFigiClient, OpenFigiError, build_jobs
+from .storage import (
+    read_raw,
+    read_snapshot,
+    write_identity_map,
+    write_metadata,
+    write_raw,
+    write_snapshot,
+)
 from .xtb_client import XtbApiError, XtbClient
 
 RAW_SYMBOLS = RAW_DIR / "all_symbols.json"
@@ -39,6 +57,9 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         log.error("Missing file: %s", exc)
         return 4
+    except OpenFigiError as exc:
+        log.error("OpenFIGI error: %s", exc)
+        return 5
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,6 +102,19 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("--market", help="filter by market code, e.g. US, PL, DE")
     show.add_argument("--limit", type=int, default=20, help="rows to print (0 = all)")
     show.set_defaults(handler=cmd_show)
+
+    map_cmd = sub.add_parser("map", help="map the snapshot onto external tickers/ISIN (stage 2)")
+    map_cmd.add_argument("--snapshot", type=Path, default=SNAPSHOT_CSV)
+    map_cmd.add_argument("--output", type=Path, default=IDENTITY_MAP_CSV)
+    map_cmd.add_argument(
+        "--isin", action="store_true", help="also resolve ISINs via OpenFIGI (network, unverified)"
+    )
+    map_cmd.add_argument(
+        "--openfigi-api-key",
+        default=None,
+        help="OpenFIGI API key (raises the rate limit); defaults to $OPENFIGI_API_KEY",
+    )
+    map_cmd.set_defaults(handler=cmd_map)
 
     return parser
 
@@ -155,6 +189,36 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"{head} {instrument.description}")
     if args.limit and len(instruments) > args.limit:
         print(f"... {len(instruments) - args.limit} more (use --limit 0)")
+    return 0
+
+
+def cmd_map(args: argparse.Namespace) -> int:
+    instruments = read_snapshot(args.snapshot)
+
+    isin_by_symbol: dict[str, str] = {}
+    if args.isin:
+        jobs, unmapped = build_jobs(instruments)
+        if unmapped:
+            log.warning(
+                "%d symbols have no OpenFIGI exchange-code mapping, skipping ISIN lookup: %s",
+                len(unmapped),
+                ", ".join(unmapped[:5]) + ("..." if len(unmapped) > 5 else ""),
+            )
+        load_env()
+        api_key = args.openfigi_api_key or os.getenv("OPENFIGI_API_KEY")
+        client = OpenFigiClient(api_key=api_key)
+        isin_by_symbol = client.lookup_isins(jobs)
+        log.info("resolved %d/%d ISINs via OpenFIGI", len(isin_by_symbol), len(jobs))
+
+    mappings = map_instruments(instruments, isin_by_symbol)
+    write_identity_map(mappings, args.output)
+
+    with_yahoo = sum(1 for m in mappings if m.yahoo_symbol)
+    with_isin = sum(1 for m in mappings if m.isin)
+    print(f"{len(mappings)} instruments mapped")
+    print(f"  yahoo ticker: {with_yahoo}")
+    print(f"  isin:         {with_isin}")
+    print(f"\nIdentity map: {args.output}")
     return 0
 
 

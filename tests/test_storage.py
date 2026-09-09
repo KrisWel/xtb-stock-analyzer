@@ -2,9 +2,12 @@ import json
 from collections import Counter
 
 from xtb_analyzer.filters import filter_instruments
+from xtb_analyzer.identity import map_instruments
 from xtb_analyzer.storage import (
+    read_identity_map,
     read_raw,
     read_snapshot,
+    write_identity_map,
     write_metadata,
     write_raw,
     write_snapshot,
@@ -50,3 +53,17 @@ def test_metadata_contains_counts(tmp_path):
     assert payload["instruments_kept"] == 3
     assert payload["rejections"] == {"category=FX": 1}
     assert payload["fetched_at"].endswith("+00:00")
+
+
+def test_identity_map_round_trip_preserves_values(tmp_path, sample_records):
+    instruments = filter_instruments(sample_records).instruments
+    original = map_instruments(instruments, isin_by_symbol={"AAPL.US": "US0378331005"})
+    path = write_identity_map(original, tmp_path / "identity_map.csv")
+
+    restored = read_identity_map(path)
+
+    assert restored == original
+    by_symbol = {m.symbol: m for m in restored}
+    assert by_symbol["AAPL.US"].isin == "US0378331005"
+    assert by_symbol["CDR.PL"].isin is None
+    assert by_symbol["CDR.PL"].yahoo_symbol == "CDR.WA"

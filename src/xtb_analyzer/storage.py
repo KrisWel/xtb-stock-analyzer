@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .identity import IdentityMapping
 from .models import Instrument
 
 BOOL_FIELDS = {"long_only", "short_selling"}
@@ -64,6 +65,33 @@ def write_metadata(path: Path, *, source: str, total: int, kept: int, rejections
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
+
+
+def write_identity_map(mappings: Iterable[IdentityMapping], path: Path) -> Path:
+    """Write the ``symbol -> external identifier`` map (Yahoo ticker, ISIN)."""
+    mappings = list(mappings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=IdentityMapping.csv_columns())
+        writer.writeheader()
+        for mapping in mappings:
+            writer.writerow(mapping.as_dict())
+    return path
+
+
+def read_identity_map(path: Path) -> list[IdentityMapping]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [
+            IdentityMapping(
+                symbol=row["symbol"],
+                ticker=row["ticker"],
+                market=row["market"],
+                currency=row["currency"],
+                yahoo_symbol=row["yahoo_symbol"] or None,
+                isin=row["isin"] or None,
+            )
+            for row in csv.DictReader(handle)
+        ]
 
 
 def _row_to_instrument(row: dict[str, str]) -> Instrument:
