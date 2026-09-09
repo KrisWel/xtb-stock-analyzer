@@ -1,0 +1,81 @@
+"""Reading and writing the instrument snapshot (CSV + metadata + raw dump)."""
+
+from __future__ import annotations
+
+import csv
+import json
+from collections import Counter
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from .models import Instrument
+
+BOOL_FIELDS = {"long_only", "short_selling"}
+INT_FIELDS = {"precision", "margin_mode", "instrument_type"}
+FLOAT_FIELDS = {"contract_size", "leverage"}
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def write_raw(records: list[dict[str, Any]], path: Path) -> Path:
+    """Persist the untouched ``getAllSymbols`` payload (git-ignored, useful for re-runs)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def read_raw(path: Path) -> list[dict[str, Any]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError(f"{path} does not contain a list of symbol records")
+    return data
+
+
+def write_snapshot(instruments: Iterable[Instrument], path: Path) -> Path:
+    """Write the committed CSV snapshot — the offline fallback source."""
+    instruments = list(instruments)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=Instrument.csv_columns())
+        writer.writeheader()
+        for instrument in instruments:
+            writer.writerow(instrument.as_dict())
+    return path
+
+
+def read_snapshot(path: Path) -> list[Instrument]:
+    """Load the committed CSV snapshot back into :class:`Instrument` objects."""
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [_row_to_instrument(row) for row in csv.DictReader(handle)]
+
+
+def write_metadata(path: Path, *, source: str, total: int, kept: int, rejections: Counter) -> Path:
+    payload = {
+        "fetched_at": utc_now_iso(),
+        "source": source,
+        "records_returned": total,
+        "instruments_kept": kept,
+        "rejections": dict(rejections.most_common()),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
+def _row_to_instrument(row: dict[str, str]) -> Instrument:
+    values: dict[str, Any] = {}
+    for column in Instrument.csv_columns():
+        raw = row.get(column, "")
+        if column in BOOL_FIELDS:
+            values[column] = {"True": True, "False": False}.get(raw)
+        elif column in INT_FIELDS:
+            values[column] = int(raw) if raw not in ("", "None") else None
+        elif column in FLOAT_FIELDS:
+            values[column] = float(raw) if raw not in ("", "None") else None
+        else:
+            values[column] = raw
+    return Instrument(**values)
