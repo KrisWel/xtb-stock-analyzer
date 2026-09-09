@@ -1,0 +1,22 @@
+# secrets
+.env
+*.pem
+
+# raw API dumps (large, regenerated on every fetch)
+data/raw/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
