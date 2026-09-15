@@ -6,28 +6,38 @@ import argparse
 import logging
 import os
 import sys
+import time
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from . import __version__
 from .config import (
     IDENTITY_MAP_CSV,
+    OHLCV_DIR,
     RAW_DIR,
     SNAPSHOT_CSV,
     SNAPSHOT_META,
+    US_STOCKS_CSV,
+    US_STOCKS_META,
     ConfigError,
     load_credentials,
     load_env,
 )
 from .filters import FilterConfig, describe_universe, filter_instruments
 from .identity import map_instruments
+from .market_data import YahooChartClient, YahooFinanceError, merge_bars, safe_filename
 from .openfigi import OpenFigiClient, OpenFigiError, build_jobs
+from .sec_edgar import SecEdgarError, fetch_company_tickers, to_symbol_record
 from .storage import (
+    read_identity_map,
+    read_ohlcv,
     read_raw,
     read_snapshot,
     write_identity_map,
     write_metadata,
+    write_ohlcv,
     write_raw,
     write_snapshot,
 )
@@ -60,6 +70,12 @@ def main(argv: list[str] | None = None) -> int:
     except OpenFigiError as exc:
         log.error("OpenFIGI error: %s", exc)
         return 5
+    except YahooFinanceError as exc:
+        log.error("Yahoo Finance error: %s", exc)
+        return 6
+    except SecEdgarError as exc:
+        log.error("SEC EDGAR error: %s", exc)
+        return 7
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,6 +102,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch.set_defaults(handler=cmd_fetch)
 
+    fetch_sec = sub.add_parser(
+        "fetch-sec",
+        help="alternative, login-free universe: US-listed stocks via SEC EDGAR",
+    )
+    fetch_sec.add_argument("--output", type=Path, default=US_STOCKS_CSV)
+    fetch_sec.add_argument("--metadata", type=Path, default=US_STOCKS_META)
+    fetch_sec.set_defaults(handler=cmd_fetch_sec)
+
     inspect = sub.add_parser("inspect", help="show field distributions used to tune the filters")
     inspect.add_argument("--from-raw", type=Path, default=RAW_SYMBOLS, help="raw dump to analyse")
     inspect.add_argument(
@@ -103,11 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("--limit", type=int, default=20, help="rows to print (0 = all)")
     show.set_defaults(handler=cmd_show)
 
-    map_cmd = sub.add_parser("map", help="map the snapshot onto external tickers/ISIN (stage 2)")
+    map_cmd = sub.add_parser("map", help="map the snapshot onto external tickers/FIGI (stage 2)")
     map_cmd.add_argument("--snapshot", type=Path, default=SNAPSHOT_CSV)
     map_cmd.add_argument("--output", type=Path, default=IDENTITY_MAP_CSV)
     map_cmd.add_argument(
-        "--isin", action="store_true", help="also resolve ISINs via OpenFIGI (network, unverified)"
+        "--figi", action="store_true", help="also resolve FIGIs via OpenFIGI (network)"
     )
     map_cmd.add_argument(
         "--openfigi-api-key",
@@ -115,6 +139,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="OpenFIGI API key (raises the rate limit); defaults to $OPENFIGI_API_KEY",
     )
     map_cmd.set_defaults(handler=cmd_map)
+
+    ohlcv = sub.add_parser(
+        "ohlcv", help="fetch/refresh OHLCV history per instrument via Yahoo Finance (stage 3)"
+    )
+    ohlcv.add_argument("--identity-map", type=Path, default=IDENTITY_MAP_CSV)
+    ohlcv.add_argument("--output-dir", type=Path, default=OHLCV_DIR)
+    ohlcv.add_argument(
+        "--range", default="5y", help="history window for a first-time fetch (e.g. 1y, 5y, max)"
+    )
+    ohlcv.add_argument("--interval", default="1d", help="bar interval (1d, 1wk, 1mo)")
+    ohlcv.add_argument(
+        "--symbols", nargs="*", help="limit to these XTB symbols (default: every mapped instrument)"
+    )
+    ohlcv.set_defaults(handler=cmd_ohlcv)
 
     return parser
 
@@ -142,6 +180,27 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     write_metadata(
         args.metadata,
         source=source,
+        total=result.total,
+        kept=result.kept,
+        rejections=result.rejections,
+    )
+
+    print(result.summary())
+    print()
+    print(_breakdown(result.instruments))
+    print(f"\nSnapshot: {args.output}\nMetadata: {args.metadata}")
+    return 0
+
+
+def cmd_fetch_sec(args: argparse.Namespace) -> int:
+    entries = fetch_company_tickers()
+    records = [to_symbol_record(entry) for entry in entries]
+    result = filter_instruments(records)
+
+    write_snapshot(result.instruments, args.output)
+    write_metadata(
+        args.metadata,
+        source="SEC EDGAR company_tickers.json (US-listed stocks, no XTB account)",
         total=result.total,
         kept=result.kept,
         rejections=result.rejections,
@@ -195,30 +254,82 @@ def cmd_show(args: argparse.Namespace) -> int:
 def cmd_map(args: argparse.Namespace) -> int:
     instruments = read_snapshot(args.snapshot)
 
-    isin_by_symbol: dict[str, str] = {}
-    if args.isin:
+    figi_by_symbol: dict[str, str] = {}
+    if args.figi:
         jobs, unmapped = build_jobs(instruments)
         if unmapped:
             log.warning(
-                "%d symbols have no OpenFIGI exchange-code mapping, skipping ISIN lookup: %s",
+                "%d symbols have no OpenFIGI exchange-code mapping, skipping FIGI lookup: %s",
                 len(unmapped),
                 ", ".join(unmapped[:5]) + ("..." if len(unmapped) > 5 else ""),
             )
         load_env()
         api_key = args.openfigi_api_key or os.getenv("OPENFIGI_API_KEY")
         client = OpenFigiClient(api_key=api_key)
-        isin_by_symbol = client.lookup_isins(jobs)
-        log.info("resolved %d/%d ISINs via OpenFIGI", len(isin_by_symbol), len(jobs))
+        figi_by_symbol = client.lookup_figis(jobs)
+        log.info("resolved %d/%d FIGIs via OpenFIGI", len(figi_by_symbol), len(jobs))
 
-    mappings = map_instruments(instruments, isin_by_symbol)
+    mappings = map_instruments(instruments, figi_by_symbol)
     write_identity_map(mappings, args.output)
 
     with_yahoo = sum(1 for m in mappings if m.yahoo_symbol)
-    with_isin = sum(1 for m in mappings if m.isin)
+    with_figi = sum(1 for m in mappings if m.figi)
     print(f"{len(mappings)} instruments mapped")
     print(f"  yahoo ticker: {with_yahoo}")
-    print(f"  isin:         {with_isin}")
+    print(f"  figi:         {with_figi}")
     print(f"\nIdentity map: {args.output}")
+    return 0
+
+
+def cmd_ohlcv(args: argparse.Namespace) -> int:
+    mappings = read_identity_map(args.identity_map)
+    if args.symbols:
+        wanted = set(args.symbols)
+        mappings = [m for m in mappings if m.symbol in wanted]
+
+    mapped = [m for m in mappings if m.yahoo_symbol]
+    skipped = len(mappings) - len(mapped)
+    if skipped:
+        log.warning("%d instruments have no yahoo_symbol, skipping", skipped)
+
+    client = YahooChartClient()
+    refreshed = 0
+    failed: list[str] = []
+
+    for mapping in mapped:
+        path = args.output_dir / f"{safe_filename(mapping.yahoo_symbol)}.csv"
+        existing = read_ohlcv(path)
+        try:
+            if existing:
+                period1 = int(
+                    datetime.fromisoformat(existing[-1].date)
+                    .replace(tzinfo=timezone.utc)
+                    .timestamp()
+                )
+                new_bars = client.get_bars(
+                    mapping.yahoo_symbol,
+                    period1=period1,
+                    period2=int(time.time()),
+                    interval=args.interval,
+                )
+            else:
+                new_bars = client.get_bars(
+                    mapping.yahoo_symbol, range_=args.range, interval=args.interval
+                )
+        except YahooFinanceError as exc:
+            log.warning("%s (%s): %s", mapping.symbol, mapping.yahoo_symbol, exc)
+            failed.append(mapping.symbol)
+            continue
+
+        write_ohlcv(merge_bars(existing, new_bars), path)
+        refreshed += 1
+
+    print(
+        f"{refreshed}/{len(mapped)} instruments refreshed, {len(failed)} failed, {skipped} skipped"
+    )
+    if failed:
+        print("failed: " + ", ".join(failed))
+    print(f"\nBars stored under: {args.output_dir}")
     return 0
 
 

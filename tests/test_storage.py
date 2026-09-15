@@ -3,12 +3,15 @@ from collections import Counter
 
 from xtb_analyzer.filters import filter_instruments
 from xtb_analyzer.identity import map_instruments
+from xtb_analyzer.market_data import Bar
 from xtb_analyzer.storage import (
     read_identity_map,
+    read_ohlcv,
     read_raw,
     read_snapshot,
     write_identity_map,
     write_metadata,
+    write_ohlcv,
     write_raw,
     write_snapshot,
 )
@@ -57,13 +60,30 @@ def test_metadata_contains_counts(tmp_path):
 
 def test_identity_map_round_trip_preserves_values(tmp_path, sample_records):
     instruments = filter_instruments(sample_records).instruments
-    original = map_instruments(instruments, isin_by_symbol={"AAPL.US": "US0378331005"})
+    original = map_instruments(instruments, figi_by_symbol={"AAPL.US": "BBG000B9XRY4"})
     path = write_identity_map(original, tmp_path / "identity_map.csv")
 
     restored = read_identity_map(path)
 
     assert restored == original
     by_symbol = {m.symbol: m for m in restored}
-    assert by_symbol["AAPL.US"].isin == "US0378331005"
-    assert by_symbol["CDR.PL"].isin is None
+    assert by_symbol["AAPL.US"].figi == "BBG000B9XRY4"
+    assert by_symbol["CDR.PL"].figi is None
     assert by_symbol["CDR.PL"].yahoo_symbol == "CDR.WA"
+
+
+def test_ohlcv_round_trip_sorts_by_date(tmp_path):
+    bars = [
+        Bar(date="2026-01-02", open=1.5, high=2.5, low=1.0, close=2.0, volume=110),
+        Bar(date="2026-01-01", open=1.0, high=2.0, low=0.5, close=1.5, volume=100),
+    ]
+    path = write_ohlcv(bars, tmp_path / "ohlcv" / "AAPL.csv")
+
+    restored = read_ohlcv(path)
+
+    assert [b.date for b in restored] == ["2026-01-01", "2026-01-02"]
+    assert restored[0] == bars[1]
+
+
+def test_read_ohlcv_missing_file_returns_empty(tmp_path):
+    assert read_ohlcv(tmp_path / "does-not-exist.csv") == []

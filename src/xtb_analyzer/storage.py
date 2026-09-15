@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .identity import IdentityMapping
+from .market_data import Bar
 from .models import Instrument
 
 BOOL_FIELDS = {"long_only", "short_selling"}
@@ -68,7 +69,7 @@ def write_metadata(path: Path, *, source: str, total: int, kept: int, rejections
 
 
 def write_identity_map(mappings: Iterable[IdentityMapping], path: Path) -> Path:
-    """Write the ``symbol -> external identifier`` map (Yahoo ticker, ISIN)."""
+    """Write the ``symbol -> external identifier`` map (Yahoo ticker, FIGI)."""
     mappings = list(mappings)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -88,7 +89,37 @@ def read_identity_map(path: Path) -> list[IdentityMapping]:
                 market=row["market"],
                 currency=row["currency"],
                 yahoo_symbol=row["yahoo_symbol"] or None,
-                isin=row["isin"] or None,
+                figi=row["figi"] or None,
+            )
+            for row in csv.DictReader(handle)
+        ]
+
+
+def write_ohlcv(bars: Iterable[Bar], path: Path) -> Path:
+    """Write one instrument's bar history, sorted by date."""
+    bars = sorted(bars, key=lambda bar: bar.date)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=Bar.csv_columns())
+        writer.writeheader()
+        for bar in bars:
+            writer.writerow(bar.as_dict())
+    return path
+
+
+def read_ohlcv(path: Path) -> list[Bar]:
+    """Load a stored bar history; an absent file (no history fetched yet) is empty."""
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [
+            Bar(
+                date=row["date"],
+                open=float(row["open"]),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                volume=int(row["volume"]),
             )
             for row in csv.DictReader(handle)
         ]
