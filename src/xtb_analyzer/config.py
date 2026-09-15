@@ -19,6 +19,9 @@ SNAPSHOT_META = DATA_DIR / "instruments.meta.json"
 #: Stage 2 identity map — symbol -> external tickers/ISIN.
 IDENTITY_MAP_CSV = DATA_DIR / "identity_map.csv"
 
+#: Stage 3 — one CSV of OHLCV bars per instrument, keyed by Yahoo ticker.
+OHLCV_DIR = DATA_DIR / "ohlcv"
+
 WS_URLS = {
     "demo": "wss://ws.xtb.com/demo",
     "real": "wss://ws.xtb.com/real",

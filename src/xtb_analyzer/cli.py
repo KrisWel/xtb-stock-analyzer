@@ -6,13 +6,16 @@ import argparse
 import logging
 import os
 import sys
+import time
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from . import __version__
 from .config import (
     IDENTITY_MAP_CSV,
+    OHLCV_DIR,
     RAW_DIR,
     SNAPSHOT_CSV,
     SNAPSHOT_META,
@@ -22,12 +25,16 @@ from .config import (
 )
 from .filters import FilterConfig, describe_universe, filter_instruments
 from .identity import map_instruments
+from .market_data import YahooChartClient, YahooFinanceError, merge_bars, safe_filename
 from .openfigi import OpenFigiClient, OpenFigiError, build_jobs
 from .storage import (
+    read_identity_map,
+    read_ohlcv,
     read_raw,
     read_snapshot,
     write_identity_map,
     write_metadata,
+    write_ohlcv,
     write_raw,
     write_snapshot,
 )
@@ -60,6 +67,9 @@ def main(argv: list[str] | None = None) -> int:
     except OpenFigiError as exc:
         log.error("OpenFIGI error: %s", exc)
         return 5
+    except YahooFinanceError as exc:
+        log.error("Yahoo Finance error: %s", exc)
+        return 6
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -115,6 +125,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="OpenFIGI API key (raises the rate limit); defaults to $OPENFIGI_API_KEY",
     )
     map_cmd.set_defaults(handler=cmd_map)
+
+    ohlcv = sub.add_parser(
+        "ohlcv", help="fetch/refresh OHLCV history per instrument via Yahoo Finance (stage 3)"
+    )
+    ohlcv.add_argument("--identity-map", type=Path, default=IDENTITY_MAP_CSV)
+    ohlcv.add_argument("--output-dir", type=Path, default=OHLCV_DIR)
+    ohlcv.add_argument(
+        "--range", default="5y", help="history window for a first-time fetch (e.g. 1y, 5y, max)"
+    )
+    ohlcv.add_argument("--interval", default="1d", help="bar interval (1d, 1wk, 1mo)")
+    ohlcv.add_argument(
+        "--symbols", nargs="*", help="limit to these XTB symbols (default: every mapped instrument)"
+    )
+    ohlcv.set_defaults(handler=cmd_ohlcv)
 
     return parser
 
@@ -219,6 +243,58 @@ def cmd_map(args: argparse.Namespace) -> int:
     print(f"  yahoo ticker: {with_yahoo}")
     print(f"  isin:         {with_isin}")
     print(f"\nIdentity map: {args.output}")
+    return 0
+
+
+def cmd_ohlcv(args: argparse.Namespace) -> int:
+    mappings = read_identity_map(args.identity_map)
+    if args.symbols:
+        wanted = set(args.symbols)
+        mappings = [m for m in mappings if m.symbol in wanted]
+
+    mapped = [m for m in mappings if m.yahoo_symbol]
+    skipped = len(mappings) - len(mapped)
+    if skipped:
+        log.warning("%d instruments have no yahoo_symbol, skipping", skipped)
+
+    client = YahooChartClient()
+    refreshed = 0
+    failed: list[str] = []
+
+    for mapping in mapped:
+        path = args.output_dir / f"{safe_filename(mapping.yahoo_symbol)}.csv"
+        existing = read_ohlcv(path)
+        try:
+            if existing:
+                period1 = int(
+                    datetime.fromisoformat(existing[-1].date)
+                    .replace(tzinfo=timezone.utc)
+                    .timestamp()
+                )
+                new_bars = client.get_bars(
+                    mapping.yahoo_symbol,
+                    period1=period1,
+                    period2=int(time.time()),
+                    interval=args.interval,
+                )
+            else:
+                new_bars = client.get_bars(
+                    mapping.yahoo_symbol, range_=args.range, interval=args.interval
+                )
+        except YahooFinanceError as exc:
+            log.warning("%s (%s): %s", mapping.symbol, mapping.yahoo_symbol, exc)
+            failed.append(mapping.symbol)
+            continue
+
+        write_ohlcv(merge_bars(existing, new_bars), path)
+        refreshed += 1
+
+    print(
+        f"{refreshed}/{len(mapped)} instruments refreshed, {len(failed)} failed, {skipped} skipped"
+    )
+    if failed:
+        print("failed: " + ", ".join(failed))
+    print(f"\nBars stored under: {args.output_dir}")
     return 0
 
 

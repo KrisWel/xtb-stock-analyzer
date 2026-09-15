@@ -4,10 +4,11 @@ Building blocks for a personal tool that tracks every instrument available on an
 **XTB** account and — later — scores each ticker as **buy / sell / hold** based on
 company fundamentals, history and technical indicators.
 
-> **Status: stage 2 of the roadmap.** The project downloads the full XTB instrument
+> **Status: stage 3 of the roadmap.** The project downloads the full XTB instrument
 > universe and reduces it to **cash equities and ETFs/ETNs only** (derivatives —
-> stock CFDs, index CFDs, FX, commodities, crypto — are deliberately excluded), then
-> maps each surviving symbol onto a Yahoo Finance ticker and, optionally, an ISIN.
+> stock CFDs, index CFDs, FX, commodities, crypto — are deliberately excluded), maps
+> each surviving symbol onto a Yahoo Finance ticker and, optionally, an ISIN, then
+> pulls and incrementally refreshes OHLCV history per instrument.
 
 ---
 
@@ -76,6 +77,10 @@ xtb-analyzer fetch --keep-cfd
 # stage 2: map the snapshot onto external tickers/ISIN
 xtb-analyzer map                      # offline: adds the Yahoo Finance ticker per symbol
 xtb-analyzer map --isin               # also resolves ISINs via OpenFIGI (network, unverified)
+
+# stage 3: fetch/refresh OHLCV history per mapped instrument
+xtb-analyzer ohlcv                    # first run: full --range history; later runs: incremental
+xtb-analyzer ohlcv --range 1y --symbols AAPL.US CDR.PL
 ```
 
 Sample output:
@@ -107,6 +112,23 @@ differently, so mapping is split in two:
   mapping blindly, the same discipline as the open questions in
   `docs/xtb-api-notes.md`.
 
+## Market data (stage 3)
+
+`xtb_analyzer/market_data.py` pulls OHLCV bars from Yahoo Finance's public chart
+endpoint, keyed off the `yahoo_symbol` column of `data/identity_map.csv`. One CSV per
+instrument under `data/ohlcv/<yahoo-ticker>.csv`:
+
+* **First run** for a symbol fetches a full `--range` window (default `5y`).
+* **Later runs** fetch only bars newer than the last stored date (`period1`/`period2`)
+  and merge them in — the incremental refresh from the roadmap. A date already on disk
+  is overwritten by the freshly-fetched bar, since Yahoo commonly restates the most
+  recent session or two as a trading day closes out.
+* Instruments with no `yahoo_symbol` (stage 2 couldn't map their market) are skipped,
+  not guessed; a failed fetch for one symbol is logged and skipped, not fatal to the run.
+
+The endpoint is undocumented — same caution as `openfigi.py`'s exchange-code table:
+useful, unofficial, can change shape without notice.
+
 ## Outputs
 
 | Path | Committed | Contents |
@@ -115,6 +137,7 @@ differently, so mapping is split in two:
 | `data/instruments.csv` | yes | the filtered universe — the offline fallback source |
 | `data/instruments.meta.json` | yes | fetch timestamp, counts, rejection breakdown |
 | `data/identity_map.csv` | yes | symbol -> Yahoo Finance ticker, and ISIN when `--isin` was used |
+| `data/ohlcv/<ticker>.csv` | yes | OHLCV bar history per instrument, incrementally refreshed |
 
 `data/instruments.csv` doubles as the **fallback**: `xtb-analyzer show` and any later
 analysis step can run from it with no XTB login at all. Commit it after each refresh
@@ -130,8 +153,9 @@ src/xtb_analyzer/
   filters.py     cash-equity/ETF rules with per-rule rejection reasons
   identity.py    stage 2: offline symbol -> Yahoo Finance ticker mapping
   openfigi.py    stage 2: optional ISIN lookup via the OpenFIGI API (network)
-  storage.py     CSV snapshot, identity map, metadata, raw dump I/O
-  cli.py         fetch / inspect / show / map
+  market_data.py stage 3: OHLCV bars via Yahoo Finance, incremental merge
+  storage.py     CSV snapshot, identity map, OHLCV, metadata, raw dump I/O
+  cli.py         fetch / inspect / show / map / ohlcv
 tests/           pytest suite driven by a fixture payload — runs without an XTB account
 docs/            API notes and progress log
 ```
@@ -139,7 +163,7 @@ docs/            API notes and progress log
 ## Development
 
 ```bash
-pytest            # 43 tests, no network or credentials required
+pytest            # 56 tests, no network or credentials required
 ruff check .
 ruff format .
 ```
@@ -150,7 +174,7 @@ CI runs the same three commands on every push and pull request.
 
 - [x] **1. Instrument universe** — fetch, filter to cash stocks + ETFs/ETNs, snapshot
 - [x] **2. Identity mapping** — map XTB symbols to ISIN / external data-provider tickers
-- [ ] **3. Market data** — OHLCV history per instrument, incremental refresh, local store
+- [x] **3. Market data** — OHLCV history per instrument, incremental refresh, local store
 - [ ] **4. Fundamentals** — valuation, profitability, growth, balance-sheet metrics
 - [ ] **5. Technicals** — trend, momentum, volatility indicators
 - [ ] **6. Scoring** — combine into a transparent buy / sell / hold verdict with rationale

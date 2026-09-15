@@ -60,3 +60,45 @@
 
 * Stage 3: OHLCV market data per instrument, incremental refresh, local store —
   keyed off the Yahoo Finance ticker from `identity_map.csv`.
+
+## 2026-09-15 — stage 3: market data
+
+**Done**
+
+* `market_data.py`: `YahooChartClient` wraps Yahoo Finance's public
+  `/v8/finance/chart/{symbol}` endpoint — injectable HTTP layer for tests, a
+  throttle (undocumented endpoint, no published rate limit), and a parser that
+  skips null sessions (holidays/gaps) instead of crashing on them.
+* `merge_bars`: incremental-refresh logic — combines a stored history with
+  freshly-fetched bars, sorted by date, with the new fetch winning on a
+  collision (Yahoo commonly restates the last session or two as a trading day
+  closes out).
+* `xtb-analyzer ohlcv` CLI command: reads `data/identity_map.csv`, fetches a
+  full `--range` window the first time per symbol and an incremental
+  `period1`/`period2` window on every later run; one CSV per instrument under
+  `data/ohlcv/<yahoo-ticker>.csv`. Instruments with no `yahoo_symbol` are
+  skipped and logged, not guessed; a failed fetch for one symbol doesn't stop
+  the run.
+* Storage round-trip (`write_ohlcv` / `read_ohlcv`) and 13 new tests — 56
+  total, still no network or credentials required to run the suite.
+
+**Not done yet — and why**
+
+* **No real data has been fetched in any stage yet.** `data/instruments.csv`,
+  `data/identity_map.csv` and `data/ohlcv/` are still empty/absent — every
+  stage so far has been developed and tested against the `tests/fixtures/`
+  payload and injected fakes, in a sandbox whose egress policy denies
+  `ws.xtb.com`, `query1.finance.yahoo.com` and `api.openfigi.com` outright
+  (verified: `curl` to all three returns a 403 from the egress gateway, not a
+  timeout), on top of there being no `.env` with XTB credentials there either.
+  Run the pipeline for real on a machine with both — `xtb-analyzer fetch` →
+  `map` → `ohlcv` — then commit the generated CSVs so the offline fallback
+  (and the OpenFIGI/Yahoo-suffix tables) get their first live check.
+* The Yahoo chart endpoint is undocumented — same caution as `openfigi.py`'s
+  exchange-code table: verify the response shape and the null-session handling
+  against a real payload before trusting it at scale.
+
+**Next**
+
+* Stage 4: fundamentals (valuation, profitability, growth, balance-sheet
+  metrics) per instrument.
