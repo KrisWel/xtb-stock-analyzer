@@ -102,3 +102,77 @@
 
 * Stage 4: fundamentals (valuation, profitability, growth, balance-sheet
   metrics) per instrument.
+
+## 2026-09-15 — live network access, real data, and two corrections
+
+The sandbox's egress policy was widened from "trusted" (npm/PyPI/GitHub/Anthropic
+only) to full internet access, and this session's XTB credentials remain unavailable
+(no demo account created). Both together mean: XTB itself is still unreachable in
+practice, but Yahoo Finance, OpenFIGI and SEC EDGAR are — and running the existing
+code against them for the first time surfaced two wrong assumptions from stage 2,
+now fixed, plus a genuine, committed alternative data source.
+
+**Corrections (verified live, both were wrong)**
+
+* **OpenFIGI's free tier does not return ISIN.** `openfigi.py` assumed it did; a real
+  `AAPL`/`US` mapping request returns `figi`, `compositeFIGI`, `shareClassFIGI`, etc.
+  but no `isin` key — Bloomberg's licensing terms don't allow OpenFIGI to publish that
+  crosswalk for free. Renamed the feature throughout: `IdentityMapping.isin` ->
+  `.figi`, `OpenFigiClient.lookup_isins` -> `.lookup_figis`, CLI `map --isin` ->
+  `map --figi`, CSV column `isin` -> `figi`.
+* **The unauthenticated OpenFIGI tier caps a request at 10 jobs, not 100.** A batch of
+  100 without an API key gets `HTTP 413`. `MAX_JOBS_PER_REQUEST` is now
+  `MAX_JOBS_PER_REQUEST_ANONYMOUS = 10` / `_WITH_KEY = 100`, picked automatically by
+  whether `OpenFigiClient` has an API key.
+
+**Done**
+
+* `sec_edgar.py`: login-free alternative universe (no account, no API key — just a
+  descriptive `User-Agent` per SEC's fair-use policy) pulling
+  `https://www.sec.gov/files/company_tickers.json`. `to_symbol_record` reshapes each
+  entry into a `getAllSymbols`-like record so `filters.filter_instruments` and the rest
+  of the pipeline handle it unchanged.
+* New `xtb-analyzer fetch-sec` CLI command, writing `data/us_stocks.csv` /
+  `.meta.json` — kept as separate files from the XTB-specific `instruments.csv` so the
+  two universes are never conflated.
+* 6 new tests (62 total), still no network or credentials required to run the suite.
+* **Real, live-fetched data committed for the first time**, via the SEC/Yahoo/OpenFIGI
+  path (XTB itself still needs credentials no session has had):
+  - `data/us_stocks.csv` + `.meta.json` — **10,422 real US-listed tickers**, fetched
+    live from SEC EDGAR.
+  - `data/us_stocks_identity_map.csv` — Yahoo Finance ticker for all 10,421 mappable
+    symbols (one `NONE.` placeholder ticker in SEC's own data has no market code to
+    map), plus real FIGIs for the 50 largest companies (see below).
+  - `data/us_stocks_ohlcv/*.csv` — 5 years of real daily OHLCV bars for the 50 largest
+    companies by SEC's own ordering (NVDA, AAPL, GOOGL, MSFT, AMZN, ...), fetched live
+    from Yahoo Finance.
+
+**Not done yet — and why**
+
+* **XTB's own universe is still empty.** Network access is no longer the blocker;
+  credentials are — no XTB demo account has been created in any session. `fetch-sec`
+  is a substitute for developing/testing against real data, not a replacement: it's
+  US-only and has no ETF/CFD distinction (see the README's "No XTB account?" section).
+* **FIGI is only backfilled for 50 of the 10,422 `us_stocks` symbols.** The
+  unauthenticated OpenFIGI tier's real rate limit is tighter than its documented
+  25-requests/6s in practice — a bulk run at the library's 0.3s throttle hit `HTTP 429`
+  after roughly 70 requests (~22s), whether from this session's own pace or contention
+  on the sandbox's shared egress IP. FIGI-backfilling the rest is a slow, patient
+  background job (roughly 1,000+ throttled batches), not something to run unsupervised
+  in one shot — left for later, at a more conservative pace or with an API key.
+* **OHLCV is only fetched for those same 50 symbols**, not the full 10,422 — a
+  deliberate choice, both to avoid hammering Yahoo's undocumented endpoint with ten
+  thousand requests in one session and because it would take roughly 90 minutes at the
+  existing 0.5s throttle. `xtb-analyzer ohlcv --identity-map
+  data/us_stocks_identity_map.csv --output-dir data/us_stocks_ohlcv` (no `--symbols`)
+  backfills the rest whenever someone's willing to let it run.
+* SEC EDGAR's rate limiting is aggressive even for a single compliant request spaced
+  reasonably — hit `HTTP 429 Request Rate Threshold Exceeded` twice while developing
+  this, recovered within roughly a minute. Worth remembering before assuming a failure
+  there is a bug rather than a cooldown.
+
+**Next**
+
+* Either populate the real XTB universe (an XTB demo account, created outside any
+  Claude session, plus `fetch` → `map --figi` → `ohlcv` on a machine with both), or
+  continue stage 4 (fundamentals) against the `us_stocks` universe already committed.

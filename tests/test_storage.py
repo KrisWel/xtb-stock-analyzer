@@ -60,15 +60,15 @@ def test_metadata_contains_counts(tmp_path):
 
 def test_identity_map_round_trip_preserves_values(tmp_path, sample_records):
     instruments = filter_instruments(sample_records).instruments
-    original = map_instruments(instruments, isin_by_symbol={"AAPL.US": "US0378331005"})
+    original = map_instruments(instruments, figi_by_symbol={"AAPL.US": "BBG000B9XRY4"})
     path = write_identity_map(original, tmp_path / "identity_map.csv")
 
     restored = read_identity_map(path)
 
     assert restored == original
     by_symbol = {m.symbol: m for m in restored}
-    assert by_symbol["AAPL.US"].isin == "US0378331005"
-    assert by_symbol["CDR.PL"].isin is None
+    assert by_symbol["AAPL.US"].figi == "BBG000B9XRY4"
+    assert by_symbol["CDR.PL"].figi is None
     assert by_symbol["CDR.PL"].yahoo_symbol == "CDR.WA"
 
 

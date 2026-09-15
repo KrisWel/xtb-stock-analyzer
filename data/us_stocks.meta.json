@@ -1,0 +1,7 @@
+{
+  "fetched_at": "2026-09-15T08:21:40+00:00",
+  "source": "SEC EDGAR company_tickers.json (US-listed stocks, no XTB account) — fetched live 2026-09-15",
+  "records_returned": 10422,
+  "instruments_kept": 10422,
+  "rejections": {}
+}

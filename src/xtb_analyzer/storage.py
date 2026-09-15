@@ -69,7 +69,7 @@ def write_metadata(path: Path, *, source: str, total: int, kept: int, rejections
 
 
 def write_identity_map(mappings: Iterable[IdentityMapping], path: Path) -> Path:
-    """Write the ``symbol -> external identifier`` map (Yahoo ticker, ISIN)."""
+    """Write the ``symbol -> external identifier`` map (Yahoo ticker, FIGI)."""
     mappings = list(mappings)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -89,7 +89,7 @@ def read_identity_map(path: Path) -> list[IdentityMapping]:
                 market=row["market"],
                 currency=row["currency"],
                 yahoo_symbol=row["yahoo_symbol"] or None,
-                isin=row["isin"] or None,
+                figi=row["figi"] or None,
             )
             for row in csv.DictReader(handle)
         ]

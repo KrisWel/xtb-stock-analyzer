@@ -1,16 +1,34 @@
-"""Optional ISIN lookup via the OpenFIGI mapping API.
+"""Optional FIGI lookup via the OpenFIGI mapping API.
 
-XTB's ``getAllSymbols`` never returns an ISIN, so identity mapping falls back
-to a public third-party service (<https://www.openfigi.com/api>). The
-unauthenticated tier is rate-limited to 25 jobs / 6 s, which is enough for a
-personal instrument universe of a few hundred symbols; pass an API key to go
-faster.
+XTB's ``getAllSymbols`` never returns a standardised external identifier, so
+identity mapping falls back to a public third-party service
+(<https://www.openfigi.com/api>). The unauthenticated tier is rate-limited to
+25 jobs / 6 s, which is enough for a personal instrument universe of a few
+hundred symbols; pass an API key to go faster.
+
+Verified live (2026-09-15): the free ``/v3/mapping`` endpoint does **not**
+return an ISIN — Bloomberg's terms only let OpenFIGI publish the FIGI itself
+(and related identifiers like the composite/share-class FIGI), not the ISIN
+crosswalk. A real response for ``AAPL``/``US`` looks like::
+
+    {"data": [{"figi": "BBG000B9XRY4", "name": "APPLE INC", "ticker": "AAPL",
+               "exchCode": "US", "compositeFIGI": "BBG000B9XRY4",
+               "shareClassFIGI": "BBG001S5N8V8", ...}]}
+
+— no ``isin`` key. So this module resolves **FIGI**, not ISIN; an earlier
+version of this module assumed the latter and that assumption was wrong.
+
+Also verified live: the unauthenticated tier caps a single request at **10**
+jobs, not 100 — a batch of 100 without an API key gets ``HTTP 413``. An API
+key raises both the per-request batch size and the rate limit; this module
+picks the right cap from whether a key is present.
 
 The ``TICKER + exchCode`` job type expects Bloomberg-style composite exchange
-codes. :data:`EXCH_CODE` is assembled from public references and **not yet
-verified** against a live snapshot of this project — same discipline as the
-open questions in ``docs/xtb-api-notes.md``: run ``xtb-analyzer map --isin``
-and check a few known tickers before trusting a market's mapping blindly.
+codes. :data:`EXCH_CODE` is assembled from public references and still not
+fully verified against every market in a live snapshot — run
+``xtb-analyzer map --figi`` and check a few known tickers before trusting a
+market's mapping blindly, same discipline as the open questions in
+``docs/xtb-api-notes.md``.
 """
 
 from __future__ import annotations
@@ -30,8 +48,10 @@ log = logging.getLogger(__name__)
 
 OPENFIGI_URL = "https://api.openfigi.com/v3/mapping"
 
-#: OpenFIGI caps a single request at 100 jobs.
-MAX_JOBS_PER_REQUEST = 100
+#: Unauthenticated tier caps a request at 10 jobs; a registered API key raises
+#: that to 100. Verified live — an anonymous batch of 100 gets HTTP 413.
+MAX_JOBS_PER_REQUEST_ANONYMOUS = 10
+MAX_JOBS_PER_REQUEST_WITH_KEY = 100
 #: Public/unauthenticated tier: 25 requests / 6 seconds.
 MIN_REQUEST_INTERVAL_S = 0.3
 
@@ -83,11 +103,14 @@ class OpenFigiClient:
         self._api_key = api_key
         self._poster = poster or _urllib_post
         self._last_request_at = 0.0
+        self._max_jobs_per_request = (
+            MAX_JOBS_PER_REQUEST_WITH_KEY if api_key else MAX_JOBS_PER_REQUEST_ANONYMOUS
+        )
 
-    def lookup_isins(self, jobs: list[FigiJob]) -> dict[str, str]:
-        """Best-effort ``symbol -> ISIN`` map; unresolved symbols are omitted."""
+    def lookup_figis(self, jobs: list[FigiJob]) -> dict[str, str]:
+        """Best-effort ``symbol -> FIGI`` map; unresolved symbols are omitted."""
         results: dict[str, str] = {}
-        for batch in _chunks(jobs, MAX_JOBS_PER_REQUEST):
+        for batch in _chunks(jobs, self._max_jobs_per_request):
             results.update(self._lookup_batch(batch))
         return results
 
@@ -117,8 +140,8 @@ class OpenFigiClient:
                 log.debug("%s (%s/%s): %s", job.symbol, job.ticker, job.exch_code, entry["error"])
                 continue
             data = entry.get("data") or []
-            if data and data[0].get("isin"):
-                found[job.symbol] = data[0]["isin"]
+            if data and data[0].get("figi"):
+                found[job.symbol] = data[0]["figi"]
         return found
 
     def _throttle(self) -> None:

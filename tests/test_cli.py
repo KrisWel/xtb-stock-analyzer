@@ -55,6 +55,23 @@ def test_show_reads_snapshot(tmp_path, sample_records_path, capsys):
     assert "AAPL.US" not in stdout
 
 
+def test_fetch_sec_writes_snapshot_without_xtb_credentials(tmp_path, monkeypatch, capsys):
+    fake_entries = [
+        {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
+        {"cik_str": 789019, "ticker": "MSFT", "title": "MICROSOFT CORP"},
+    ]
+    monkeypatch.setattr("xtb_analyzer.cli.fetch_company_tickers", lambda: fake_entries)
+
+    out = tmp_path / "us_stocks.csv"
+    meta = tmp_path / "us_stocks.meta.json"
+    exit_code = main(["fetch-sec", "--output", str(out), "--metadata", str(meta)])
+
+    assert exit_code == 0
+    rows = out.read_text(encoding="utf-8").splitlines()
+    assert any(row.startswith("AAPL.US,") for row in rows[1:])
+    assert json.loads(meta.read_text())["instruments_kept"] == 2
+
+
 def test_inspect_from_raw(sample_records_path, capsys):
     assert main(["inspect", "--from-raw", str(sample_records_path)]) == 0
     stdout = capsys.readouterr().out
@@ -83,11 +100,11 @@ def test_map_writes_identity_csv_without_network(tmp_path, sample_records_path, 
     assert exit_code == 0
     assert out.exists()
     rows = out.read_text(encoding="utf-8").splitlines()
-    assert rows[0] == "symbol,ticker,market,currency,yahoo_symbol,isin"
+    assert rows[0] == "symbol,ticker,market,currency,yahoo_symbol,figi"
     assert any(row.startswith("CDR.PL,CDR,PL,PLN,CDR.WA,") for row in rows[1:])
     stdout = capsys.readouterr().out
     assert "3 instruments mapped" in stdout
-    assert "isin:         0" in stdout
+    assert "figi:         0" in stdout
 
 
 class _FakeYahooChartClient:

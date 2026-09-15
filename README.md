@@ -7,8 +7,10 @@ company fundamentals, history and technical indicators.
 > **Status: stage 3 of the roadmap.** The project downloads the full XTB instrument
 > universe and reduces it to **cash equities and ETFs/ETNs only** (derivatives —
 > stock CFDs, index CFDs, FX, commodities, crypto — are deliberately excluded), maps
-> each surviving symbol onto a Yahoo Finance ticker and, optionally, an ISIN, then
-> pulls and incrementally refreshes OHLCV history per instrument.
+> each surviving symbol onto a Yahoo Finance ticker and, optionally, a FIGI, then
+> pulls and incrementally refreshes OHLCV history per instrument. No XTB account
+> available? `fetch-sec` is a login-free alternative universe (US-listed stocks via
+> SEC EDGAR) that the rest of the pipeline works with unchanged — see below.
 
 ---
 
@@ -74,13 +76,18 @@ xtb-analyzer fetch --from-raw data/raw/all_symbols.json
 # keep the CFD rows too (debugging only)
 xtb-analyzer fetch --keep-cfd
 
-# stage 2: map the snapshot onto external tickers/ISIN
+# stage 2: map the snapshot onto external tickers/FIGI
 xtb-analyzer map                      # offline: adds the Yahoo Finance ticker per symbol
-xtb-analyzer map --isin               # also resolves ISINs via OpenFIGI (network, unverified)
+xtb-analyzer map --figi               # also resolves FIGIs via OpenFIGI (network)
 
 # stage 3: fetch/refresh OHLCV history per mapped instrument
 xtb-analyzer ohlcv                    # first run: full --range history; later runs: incremental
 xtb-analyzer ohlcv --range 1y --symbols AAPL.US CDR.PL
+
+# no XTB account? alternative, login-free universe: US-listed stocks via SEC EDGAR
+xtb-analyzer fetch-sec
+xtb-analyzer map --snapshot data/us_stocks.csv --output data/us_stocks_identity_map.csv
+xtb-analyzer ohlcv --identity-map data/us_stocks_identity_map.csv --output-dir data/us_stocks_ohlcv
 ```
 
 Sample output:
@@ -99,18 +106,22 @@ by market:      US=1, PL=1, DE=1
 
 ## Identity mapping (stage 2)
 
-`getAllSymbols` never returns an ISIN, and every data provider suffixes tickers
-differently, so mapping is split in two:
+`getAllSymbols` never returns a standardised external identifier, and every data
+provider suffixes tickers differently, so mapping is split in two:
 
 * **External tickers** — `xtb_analyzer/identity.py` reshapes `TICKER.MARKET` into the
   suffix Yahoo Finance expects (`CDR.PL` → `CDR.WA`, `IUSQ.DE` → `IUSQ.DE`, ...). Pure,
   offline, deterministic — no network involved.
-* **ISIN** — `xtb_analyzer/openfigi.py` optionally resolves ISINs through the
-  [OpenFIGI](https://www.openfigi.com/api) mapping API (`--isin`). Its market →
-  exchange-code table is assembled from public references and **not yet verified**
-  against a live snapshot — check a few known tickers before trusting a market's
-  mapping blindly, the same discipline as the open questions in
-  `docs/xtb-api-notes.md`.
+* **FIGI, not ISIN** — `xtb_analyzer/openfigi.py` optionally resolves
+  [FIGIs](https://www.openfigi.com/) through the OpenFIGI mapping API (`--figi`). An
+  earlier version of this project assumed OpenFIGI's free tier returns an ISIN; running
+  it live (2026-09-15) showed that's wrong — Bloomberg's licensing terms mean the free
+  API only ever returns the FIGI itself, never the ISIN. Also verified live: the
+  unauthenticated tier caps a request at **10** jobs (a batch of 100 gets `HTTP 413`) and
+  is rate-limited tightly enough that mapping a large universe takes a while — see
+  `docs/PROGRESS.md`. The market → exchange-code table is still not fully verified for
+  every market — check a few known tickers before trusting one blindly, same discipline
+  as the open questions in `docs/xtb-api-notes.md`.
 
 ## Market data (stage 3)
 
@@ -127,7 +138,41 @@ instrument under `data/ohlcv/<yahoo-ticker>.csv`:
   not guessed; a failed fetch for one symbol is logged and skipped, not fatal to the run.
 
 The endpoint is undocumented — same caution as `openfigi.py`'s exchange-code table:
-useful, unofficial, can change shape without notice.
+useful, unofficial, can change shape without notice. Verified live: works fine with a
+descriptive `User-Agent` and the default throttle; an empty/generic `User-Agent` gets a
+`429` even at a low request rate.
+
+## No XTB account? `fetch-sec` — a login-free alternative universe
+
+`xtb-analyzer fetch` needs XTB credentials (a free demo account is enough, but still an
+account). `xtb_analyzer/sec_edgar.py` is a fallback that needs **no account and no API
+key at all**: it pulls the SEC's public `company_tickers.json`
+(<https://www.sec.gov/files/company_tickers.json>), which lists every US-listed
+company with an active ticker — only a descriptive `User-Agent` is required, per SEC's
+fair-use policy.
+
+```bash
+xtb-analyzer fetch-sec   # -> data/us_stocks.csv, data/us_stocks.meta.json
+```
+
+Worth knowing before treating this as equivalent to the real XTB universe:
+
+* **US-listed common stock (and ETFs mixed in) only** — none of the other markets XTB
+  covers (PL, DE, UK, ...), and SEC's file doesn't distinguish an operating company from
+  a fund, so every row comes through as `asset_class=STOCK` even where the ticker is
+  really an ETF (e.g. `AAAU.US`, a gold ETF).
+* No CFD noise to filter — SEC only lists real issuers, so nothing here is rejected.
+* No leverage/margin/long-only fields — those are XTB account concepts; they're `None`
+  here, same tolerant handling `Instrument.from_record` already gives any record with
+  missing fields.
+* **SEC rate-limits fairly aggressively** even for compliant requests (`HTTP 429
+  Request Rate Threshold Exceeded`) — seen firsthand fetching the live data committed in
+  this repo; a shared egress IP (e.g. a shared cloud sandbox) makes it worse. Space out
+  repeated runs.
+
+`map` and `ohlcv` work unchanged against this alternative universe — just point
+`--snapshot`/`--identity-map`/`--output-dir` at the `us_stocks*` paths, as in the
+Usage section above.
 
 ## Outputs
 
@@ -136,12 +181,17 @@ useful, unofficial, can change shape without notice.
 | `data/raw/all_symbols.json` | no (git-ignored) | untouched `getAllSymbols` payload |
 | `data/instruments.csv` | yes | the filtered universe — the offline fallback source |
 | `data/instruments.meta.json` | yes | fetch timestamp, counts, rejection breakdown |
-| `data/identity_map.csv` | yes | symbol -> Yahoo Finance ticker, and ISIN when `--isin` was used |
+| `data/identity_map.csv` | yes | symbol -> Yahoo Finance ticker, and FIGI when `--figi` was used |
 | `data/ohlcv/<ticker>.csv` | yes | OHLCV bar history per instrument, incrementally refreshed |
+| `data/us_stocks.csv` + `.meta.json` | yes | `fetch-sec`'s login-free alternative universe (US-listed stocks) |
+| `data/us_stocks_identity_map.csv` | yes | identity map for the `us_stocks` universe |
+| `data/us_stocks_ohlcv/<ticker>.csv` | yes | OHLCV history for the 50 largest `us_stocks` companies (by SEC's own ordering) |
 
 `data/instruments.csv` doubles as the **fallback**: `xtb-analyzer show` and any later
 analysis step can run from it with no XTB login at all. Commit it after each refresh
-so the repo always carries a working universe.
+so the repo always carries a working universe. `data/instruments.csv` and
+`data/identity_map.csv` are still empty — no XTB credentials have been available in any
+session so far; `data/us_stocks*` is real, live-fetched data from the login-free path.
 
 ## Project layout
 
@@ -152,10 +202,11 @@ src/xtb_analyzer/
   models.py      Instrument dataclass, symbol parsing (ticker + market)
   filters.py     cash-equity/ETF rules with per-rule rejection reasons
   identity.py    stage 2: offline symbol -> Yahoo Finance ticker mapping
-  openfigi.py    stage 2: optional ISIN lookup via the OpenFIGI API (network)
+  openfigi.py    stage 2: optional FIGI lookup via the OpenFIGI API (network)
   market_data.py stage 3: OHLCV bars via Yahoo Finance, incremental merge
+  sec_edgar.py   login-free alternative universe: US-listed stocks via SEC EDGAR
   storage.py     CSV snapshot, identity map, OHLCV, metadata, raw dump I/O
-  cli.py         fetch / inspect / show / map / ohlcv
+  cli.py         fetch / fetch-sec / inspect / show / map / ohlcv
 tests/           pytest suite driven by a fixture payload — runs without an XTB account
 docs/            API notes and progress log
 ```
@@ -163,7 +214,7 @@ docs/            API notes and progress log
 ## Development
 
 ```bash
-pytest            # 56 tests, no network or credentials required
+pytest            # 62 tests, no network or credentials required
 ruff check .
 ruff format .
 ```
@@ -173,7 +224,7 @@ CI runs the same three commands on every push and pull request.
 ## Roadmap
 
 - [x] **1. Instrument universe** — fetch, filter to cash stocks + ETFs/ETNs, snapshot
-- [x] **2. Identity mapping** — map XTB symbols to ISIN / external data-provider tickers
+- [x] **2. Identity mapping** — map XTB symbols to FIGI / external data-provider tickers
 - [x] **3. Market data** — OHLCV history per instrument, incremental refresh, local store
 - [ ] **4. Fundamentals** — valuation, profitability, growth, balance-sheet metrics
 - [ ] **5. Technicals** — trend, momentum, volatility indicators

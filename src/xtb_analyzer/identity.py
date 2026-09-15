@@ -1,14 +1,16 @@
-"""Stage 2: map XTB symbols onto external identifiers (ISIN, data-provider tickers).
+"""Stage 2: map XTB symbols onto external identifiers (FIGI, data-provider tickers).
 
-``getAllSymbols`` never returns an ISIN, and there is no universal external
-ticker — every data provider suffixes the venue differently. The two problems
-are kept separate:
+``getAllSymbols`` never returns a standardised external identifier, and there
+is no universal external ticker — every data provider suffixes the venue
+differently. The two problems are kept separate:
 
   * :func:`to_yahoo_symbol` reshapes the XTB ``TICKER.MARKET`` symbol into the
     suffix Yahoo Finance expects for that venue. Pure and offline — no network,
     no external service, safe to run against the committed snapshot.
-  * ISIN lookup needs a third-party service, since XTB does not expose it —
-    see :mod:`xtb_analyzer.openfigi` for that (network, optional, `--isin`).
+  * FIGI lookup needs a third-party service, since XTB does not expose it —
+    see :mod:`xtb_analyzer.openfigi` for that (network, optional, `--figi`).
+    Note it's FIGI, not ISIN: OpenFIGI's free tier does not return ISIN
+    (Bloomberg licensing) — verified live, see that module's docstring.
 """
 
 from __future__ import annotations
@@ -52,11 +54,11 @@ class IdentityMapping:
     market: str
     currency: str
     yahoo_symbol: str | None
-    isin: str | None = None
+    figi: str | None = None
 
     @classmethod
     def csv_columns(cls) -> list[str]:
-        return ["symbol", "ticker", "market", "currency", "yahoo_symbol", "isin"]
+        return ["symbol", "ticker", "market", "currency", "yahoo_symbol", "figi"]
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -65,7 +67,7 @@ class IdentityMapping:
             "market": self.market,
             "currency": self.currency,
             "yahoo_symbol": self.yahoo_symbol or "",
-            "isin": self.isin or "",
+            "figi": self.figi or "",
         }
 
 
@@ -81,15 +83,15 @@ def to_yahoo_symbol(ticker: str, market: str) -> str | None:
 
 
 def map_instruments(
-    instruments: list[Instrument], isin_by_symbol: dict[str, str] | None = None
+    instruments: list[Instrument], figi_by_symbol: dict[str, str] | None = None
 ) -> list[IdentityMapping]:
     """Build the identity map for a filtered instrument list.
 
-    ``isin_by_symbol`` is an optional pre-resolved ``symbol -> ISIN`` lookup
-    (typically from :func:`xtb_analyzer.openfigi.OpenFigiClient.lookup_isins`);
+    ``figi_by_symbol`` is an optional pre-resolved ``symbol -> FIGI`` lookup
+    (typically from :func:`xtb_analyzer.openfigi.OpenFigiClient.lookup_figis`);
     omit it to produce ticker-only rows.
     """
-    isin_by_symbol = isin_by_symbol or {}
+    figi_by_symbol = figi_by_symbol or {}
     return [
         IdentityMapping(
             symbol=instrument.symbol,
@@ -97,7 +99,7 @@ def map_instruments(
             market=instrument.market,
             currency=instrument.currency,
             yahoo_symbol=to_yahoo_symbol(instrument.ticker, instrument.market),
-            isin=isin_by_symbol.get(instrument.symbol),
+            figi=figi_by_symbol.get(instrument.symbol),
         )
         for instrument in instruments
     ]

@@ -16,11 +16,17 @@ RAW_DIR = DATA_DIR / "raw"
 SNAPSHOT_CSV = DATA_DIR / "instruments.csv"
 SNAPSHOT_META = DATA_DIR / "instruments.meta.json"
 
-#: Stage 2 identity map — symbol -> external tickers/ISIN.
+#: Stage 2 identity map — symbol -> external tickers/FIGI.
 IDENTITY_MAP_CSV = DATA_DIR / "identity_map.csv"
 
 #: Stage 3 — one CSV of OHLCV bars per instrument, keyed by Yahoo ticker.
 OHLCV_DIR = DATA_DIR / "ohlcv"
+
+#: Alternative, login-free universe (SEC EDGAR, US-listed stocks only) — see
+#: xtb_analyzer.sec_edgar. Kept separate from the XTB-specific files above so
+#: the two universes are never conflated.
+US_STOCKS_CSV = DATA_DIR / "us_stocks.csv"
+US_STOCKS_META = DATA_DIR / "us_stocks.meta.json"
 
 WS_URLS = {
     "demo": "wss://ws.xtb.com/demo",

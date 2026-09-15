@@ -19,23 +19,23 @@ def test_to_yahoo_symbol(ticker, market, expected):
     assert to_yahoo_symbol(ticker, market) == expected
 
 
-def test_map_instruments_without_isin(sample_records):
+def test_map_instruments_without_figi(sample_records):
     instruments = filter_instruments(sample_records).instruments
     mappings = map_instruments(instruments)
 
     by_symbol = {m.symbol: m for m in mappings}
     assert by_symbol["AAPL.US"].yahoo_symbol == "AAPL"
     assert by_symbol["CDR.PL"].yahoo_symbol == "CDR.WA"
-    assert all(m.isin is None for m in mappings)
+    assert all(m.figi is None for m in mappings)
 
 
-def test_map_instruments_applies_isin_lookup(sample_records):
+def test_map_instruments_applies_figi_lookup(sample_records):
     instruments = filter_instruments(sample_records).instruments
-    mappings = map_instruments(instruments, isin_by_symbol={"AAPL.US": "US0378331005"})
+    mappings = map_instruments(instruments, figi_by_symbol={"AAPL.US": "BBG000B9XRY4"})
 
     by_symbol = {m.symbol: m for m in mappings}
-    assert by_symbol["AAPL.US"].isin == "US0378331005"
-    assert by_symbol["CDR.PL"].isin is None
+    assert by_symbol["AAPL.US"].figi == "BBG000B9XRY4"
+    assert by_symbol["CDR.PL"].figi is None
 
 
 def test_identity_mapping_as_dict_uses_empty_strings_for_none():
@@ -44,4 +44,4 @@ def test_identity_mapping_as_dict_uses_empty_strings_for_none():
 
     row = mappings[0].as_dict()
     assert row["yahoo_symbol"] == ""
-    assert row["isin"] == ""
+    assert row["figi"] == ""
