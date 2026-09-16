@@ -7,8 +7,10 @@
 | `identity_map.csv` | yes | `xtb-analyzer map` — symbol -> Yahoo Finance ticker (offline) and FIGI (`--figi`, network) |
 | `ohlcv/<ticker>.csv` | yes | `xtb-analyzer ohlcv` — OHLCV bar history per instrument, incrementally refreshed |
 | `us_stocks.csv` + `.meta.json` | yes | `xtb-analyzer fetch-sec` — login-free alternative universe (US-listed stocks, SEC EDGAR) |
+| `us_stocks_cik.csv` | yes | `xtb-analyzer fetch-sec` — symbol -> SEC CIK sidecar, needed for `fundamentals` |
 | `us_stocks_identity_map.csv` | yes | identity map for the `us_stocks` universe |
 | `us_stocks_ohlcv/<ticker>.csv` | yes | OHLCV history for `us_stocks` (currently: the 50 largest companies) |
+| `us_stocks_fundamentals.csv` | yes | `xtb-analyzer fundamentals` — raw fundamentals per company, SEC EDGAR XBRL (currently: 1 company — see `docs/PROGRESS.md`) |
 | `raw/all_symbols.json` | **no** (git-ignored) | `xtb-analyzer fetch` — untouched API payload, several MB |
 
 `instruments.csv` and `identity_map.csv` are still empty — every session so far has

@@ -10,9 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .fundamentals import Fundamentals
 from .identity import IdentityMapping
 from .market_data import Bar
 from .models import Instrument
+from .sec_edgar import CikEntry
 
 BOOL_FIELDS = {"long_only", "short_selling"}
 INT_FIELDS = {"precision", "margin_mode", "instrument_type"}
@@ -123,6 +125,68 @@ def read_ohlcv(path: Path) -> list[Bar]:
             )
             for row in csv.DictReader(handle)
         ]
+
+
+def write_cik_map(entries: Iterable[CikEntry], path: Path) -> Path:
+    """Write the ``symbol -> SEC CIK`` sidecar for the ``us_stocks`` universe."""
+    entries = list(entries)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CikEntry.csv_columns())
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow(entry.as_dict())
+    return path
+
+
+def read_cik_map(path: Path) -> list[CikEntry]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [
+            CikEntry(symbol=row["symbol"], cik=int(row["cik"])) for row in csv.DictReader(handle)
+        ]
+
+
+def write_fundamentals(rows: Iterable[Fundamentals], path: Path) -> Path:
+    """Write one CSV row of raw, filed figures per company."""
+    rows = list(rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=Fundamentals.csv_columns())
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row.as_dict())
+    return path
+
+
+def read_fundamentals(path: Path) -> list[Fundamentals]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [_row_to_fundamentals(row) for row in csv.DictReader(handle)]
+
+
+_FUNDAMENTALS_FLOAT_FIELDS = {
+    "revenue",
+    "revenue_prior_year",
+    "net_income",
+    "net_income_prior_year",
+    "gross_profit",
+    "total_assets",
+    "total_liabilities",
+    "stockholders_equity",
+    "eps_diluted",
+}
+
+
+def _row_to_fundamentals(row: dict[str, str]) -> Fundamentals:
+    values: dict[str, Any] = {
+        "symbol": row["symbol"],
+        "cik": int(row["cik"]),
+        "fiscal_year": int(row["fiscal_year"]) if row.get("fiscal_year") else None,
+        "fiscal_year_end": row.get("fiscal_year_end") or None,
+    }
+    for column in _FUNDAMENTALS_FLOAT_FIELDS:
+        raw = row.get(column, "")
+        values[column] = float(raw) if raw else None
+    return Fundamentals(**values)
 
 
 def _row_to_instrument(row: dict[str, str]) -> Instrument:

@@ -19,22 +19,28 @@ from .config import (
     RAW_DIR,
     SNAPSHOT_CSV,
     SNAPSHOT_META,
+    US_STOCKS_CIK_CSV,
     US_STOCKS_CSV,
+    US_STOCKS_FUNDAMENTALS_CSV,
     US_STOCKS_META,
     ConfigError,
     load_credentials,
     load_env,
 )
 from .filters import FilterConfig, describe_universe, filter_instruments
+from .fundamentals import FundamentalsError, SecFactsClient, extract_fundamentals
 from .identity import map_instruments
 from .market_data import YahooChartClient, YahooFinanceError, merge_bars, safe_filename
 from .openfigi import OpenFigiClient, OpenFigiError, build_jobs
-from .sec_edgar import SecEdgarError, fetch_company_tickers, to_symbol_record
+from .sec_edgar import SecEdgarError, build_cik_map, fetch_company_tickers, to_symbol_record
 from .storage import (
+    read_cik_map,
     read_identity_map,
     read_ohlcv,
     read_raw,
     read_snapshot,
+    write_cik_map,
+    write_fundamentals,
     write_identity_map,
     write_metadata,
     write_ohlcv,
@@ -76,6 +82,9 @@ def main(argv: list[str] | None = None) -> int:
     except SecEdgarError as exc:
         log.error("SEC EDGAR error: %s", exc)
         return 7
+    except FundamentalsError as exc:
+        log.error("Fundamentals error: %s", exc)
+        return 8
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -108,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch_sec.add_argument("--output", type=Path, default=US_STOCKS_CSV)
     fetch_sec.add_argument("--metadata", type=Path, default=US_STOCKS_META)
+    fetch_sec.add_argument(
+        "--cik-output",
+        type=Path,
+        default=US_STOCKS_CIK_CSV,
+        help="symbol -> CIK sidecar for stage 4",
+    )
     fetch_sec.set_defaults(handler=cmd_fetch_sec)
 
     inspect = sub.add_parser("inspect", help="show field distributions used to tune the filters")
@@ -153,6 +168,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--symbols", nargs="*", help="limit to these XTB symbols (default: every mapped instrument)"
     )
     ohlcv.set_defaults(handler=cmd_ohlcv)
+
+    fundamentals = sub.add_parser(
+        "fundamentals",
+        help="fetch company fundamentals via SEC EDGAR XBRL (stage 4, us_stocks only)",
+    )
+    fundamentals.add_argument("--cik-map", type=Path, default=US_STOCKS_CIK_CSV)
+    fundamentals.add_argument("--output", type=Path, default=US_STOCKS_FUNDAMENTALS_CSV)
+    fundamentals.add_argument(
+        "--symbols", nargs="*", help="limit to these symbols (default: every symbol in the CIK map)"
+    )
+    fundamentals.set_defaults(handler=cmd_fundamentals)
 
     return parser
 
@@ -205,11 +231,12 @@ def cmd_fetch_sec(args: argparse.Namespace) -> int:
         kept=result.kept,
         rejections=result.rejections,
     )
+    write_cik_map(build_cik_map(entries), args.cik_output)
 
     print(result.summary())
     print()
     print(_breakdown(result.instruments))
-    print(f"\nSnapshot: {args.output}\nMetadata: {args.metadata}")
+    print(f"\nSnapshot: {args.output}\nMetadata: {args.metadata}\nCIK map: {args.cik_output}")
     return 0
 
 
@@ -330,6 +357,36 @@ def cmd_ohlcv(args: argparse.Namespace) -> int:
     if failed:
         print("failed: " + ", ".join(failed))
     print(f"\nBars stored under: {args.output_dir}")
+    return 0
+
+
+def cmd_fundamentals(args: argparse.Namespace) -> int:
+    entries = read_cik_map(args.cik_map)
+    if args.symbols:
+        wanted = set(args.symbols)
+        entries = [e for e in entries if e.symbol in wanted]
+
+    client = SecFactsClient()
+    rows = []
+    failed: list[str] = []
+
+    for entry in entries:
+        try:
+            payload = client.get_company_facts(entry.cik)
+        except FundamentalsError as exc:
+            log.warning("%s (CIK %s): %s", entry.symbol, entry.cik, exc)
+            failed.append(entry.symbol)
+            continue
+        rows.append(extract_fundamentals(entry.symbol, entry.cik, payload))
+
+    write_fundamentals(rows, args.output)
+
+    with_revenue = sum(1 for r in rows if r.revenue is not None)
+    print(f"{len(rows)}/{len(entries)} fundamentals fetched, {len(failed)} failed")
+    print(f"  with revenue figure: {with_revenue}")
+    if failed:
+        print("failed: " + ", ".join(failed))
+    print(f"\nFundamentals: {args.output}")
     return 0
 
 

@@ -176,3 +176,66 @@ now fixed, plus a genuine, committed alternative data source.
 * Either populate the real XTB universe (an XTB demo account, created outside any
   Claude session, plus `fetch` → `map --figi` → `ohlcv` on a machine with both), or
   continue stage 4 (fundamentals) against the `us_stocks` universe already committed.
+
+## 2026-09-16 — stage 4: fundamentals, and a concept-selection bug caught live
+
+**Done**
+
+* `fundamentals.py`: `SecFactsClient` wraps SEC EDGAR's XBRL company-facts endpoint
+  (`data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json`) — same no-account, no-API-key,
+  compliant-`User-Agent` deal as `sec_edgar.py`, keyed by the CIK it already resolves.
+  `extract_fundamentals` reshapes one company's raw facts into revenue, net income,
+  gross profit, total assets, total liabilities, stockholders' equity and diluted EPS,
+  plus the prior fiscal year for revenue/net income (a simple YoY growth figure).
+  `Fundamentals` stores the raw filed numbers and exposes `.net_margin`,
+  `.gross_margin`, `.revenue_growth`, `.net_income_growth`, `.liabilities_to_equity` as
+  computed properties, not redundant CSV columns.
+* `sec_edgar.CikEntry` / `build_cik_map`: the `symbol -> CIK` sidecar `fetch-sec` now
+  also writes (`data/us_stocks_cik.csv`), kept separate from `Instrument` since CIK is
+  meaningless for the XTB universe.
+* New `xtb-analyzer fundamentals` CLI command; `write_fundamentals` / `read_fundamentals`
+  / `write_cik_map` / `read_cik_map` round-trip storage.
+* 17 new tests (79 total), still no network or credentials required to run the suite.
+
+**A real bug, caught only by running against live data**
+
+Apple's facts still carry the `Revenues` concept, but it's been stale since FY2018 —
+Apple adopted ASC 606 and switched to
+`RevenueFromContractWithCustomerExcludingAssessedTax` for every filing since. The first
+version of `extract_fundamentals` picked the first concept name *present* in a filer's
+facts (`_pick_first_available`), not the most *current* one — so it silently paired a
+seven-year-stale revenue figure (`$62.9B`, FY2018) with a fresh net income (`$112.0B`,
+FY2025) and computed a nonsense 178% net margin. Rewrote the picking logic
+(`_best_annual` / `_best_point_in_time`) to evaluate every candidate concept name and
+keep whichever has the most recent period end, with a regression test
+(`test_extract_fundamentals_prefers_the_current_concept_over_a_stale_one`) reproducing
+the exact scenario. Fixed, Apple's real FY2025 figures now come through correctly:
+revenue \$416.16B, net income \$112.01B, gross margin 46.9%, net margin 26.9% — all in
+line with Apple's actual reported FY2025 results.
+
+**Done, but only partially — SEC's bot detection is stricter than documented**
+
+* `data/us_stocks_fundamentals.csv` currently holds **one real row: `AAPL.US`**,
+  fetched live and used to catch and verify the bug above.
+* A follow-up attempt to backfill the same 50 symbols `us_stocks_ohlcv` already covers
+  — sequential requests, 1 request/second, well under SEC's documented 10 req/s cap —
+  got the **entire session's traffic flagged**: every one of the 50 requests came back
+  `"Your Request Originates from an Undeclared Automated Tool"`, a stricter,
+  IP-reputation-based block (SEC's own page: recovers after roughly a 10-minute quiet
+  period), not the ordinary `429 Request Rate Threshold Exceeded` seen earlier fetching
+  `company_tickers.json`.
+* Two changes made in response: `sec_edgar.USER_AGENT` now includes a concrete,
+  checkable contact URL (the repo itself) instead of the vaguer "contact via GitHub
+  issues", and `fundamentals.MIN_REQUEST_INTERVAL_S` doubled to 2.0s. Whether either
+  actually matters (versus this simply needing the stated cooldown) isn't verified yet
+  — a background retry was scheduled after an ~11-minute wait; check further down this
+  log or the session transcript for the outcome, and treat SEC's fundamentals endpoint
+  as needing real patience for a bulk run, not a single unattended sitting.
+
+**Next**
+
+* Backfill `us_stocks_fundamentals.csv` for the rest of the 50-symbol OHLCV subset (and
+  eventually the full 10,422-company universe) at a conservative pace, tolerating
+  occasional cooldowns rather than fighting them.
+* Stage 5: technicals (trend, momentum, volatility indicators) — can build directly on
+  the OHLCV data already committed.

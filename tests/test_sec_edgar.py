@@ -4,7 +4,9 @@ import pytest
 
 from xtb_analyzer.sec_edgar import (
     USER_AGENT,
+    CikEntry,
     SecEdgarError,
+    build_cik_map,
     fetch_company_tickers,
     to_symbol_record,
 )
@@ -54,3 +56,23 @@ def test_to_symbol_record_shapes_like_get_all_symbols():
     assert record["categoryName"] == "STC"
     assert record["currency"] == "USD"
     assert "CFD" not in record["groupName"]
+
+
+def test_build_cik_map():
+    entries = [
+        {"cik_str": 320193, "ticker": "aapl", "title": "Apple Inc."},
+        {"cik_str": 789019, "ticker": "MSFT", "title": "MICROSOFT CORP"},
+    ]
+
+    result = build_cik_map(entries)
+
+    assert result == [
+        CikEntry(symbol="AAPL.US", cik=320193),
+        CikEntry(symbol="MSFT.US", cik=789019),
+    ]
+
+
+def test_build_cik_map_skips_unparseable_cik():
+    entries = [{"cik_str": "not-a-number", "ticker": "X", "title": "X Corp"}]
+
+    assert build_cik_map(entries) == []
