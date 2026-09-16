@@ -64,12 +64,17 @@ def test_fetch_sec_writes_snapshot_without_xtb_credentials(tmp_path, monkeypatch
 
     out = tmp_path / "us_stocks.csv"
     meta = tmp_path / "us_stocks.meta.json"
-    exit_code = main(["fetch-sec", "--output", str(out), "--metadata", str(meta)])
+    cik_out = tmp_path / "us_stocks_cik.csv"
+    exit_code = main(
+        ["fetch-sec", "--output", str(out), "--metadata", str(meta), "--cik-output", str(cik_out)]
+    )
 
     assert exit_code == 0
     rows = out.read_text(encoding="utf-8").splitlines()
     assert any(row.startswith("AAPL.US,") for row in rows[1:])
     assert json.loads(meta.read_text())["instruments_kept"] == 2
+    cik_rows = cik_out.read_text(encoding="utf-8").splitlines()
+    assert "AAPL.US,320193" in cik_rows
 
 
 def test_inspect_from_raw(sample_records_path, capsys):
@@ -161,3 +166,64 @@ def test_ohlcv_refreshes_every_mapped_instrument(
     main(["ohlcv", "--identity-map", str(identity_map), "--output-dir", str(out_dir)])
     symbol, kwargs = fake_client.calls[0]
     assert "period1" in kwargs and "period2" in kwargs
+
+
+class _FakeSecFactsClient:
+    """Stands in for xtb_analyzer.fundamentals.SecFactsClient — no network in tests."""
+
+    def __init__(self):
+        self.calls = []
+
+    def get_company_facts(self, cik):
+        self.calls.append(cik)
+        return {
+            "facts": {
+                "us-gaap": {
+                    "Revenues": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "start": "2024-01-01",
+                                    "end": "2024-12-31",
+                                    "val": 1000,
+                                    "form": "10-K",
+                                    "fp": "FY",
+                                    "fy": 2024,
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+
+
+def test_fundamentals_writes_csv_for_every_cik(tmp_path, monkeypatch, capsys):
+    cik_map = tmp_path / "us_stocks_cik.csv"
+    cik_map.write_text("symbol,cik\nAAPL.US,320193\nMSFT.US,789019\n", encoding="utf-8")
+
+    fake_client = _FakeSecFactsClient()
+    monkeypatch.setattr("xtb_analyzer.cli.SecFactsClient", lambda: fake_client)
+
+    out = tmp_path / "us_stocks_fundamentals.csv"
+    exit_code = main(["fundamentals", "--cik-map", str(cik_map), "--output", str(out)])
+
+    assert exit_code == 0
+    assert fake_client.calls == [320193, 789019]
+    rows = out.read_text(encoding="utf-8").splitlines()
+    assert any(row.startswith("AAPL.US,320193,2024,2024-12-31,1000") for row in rows[1:])
+    stdout = capsys.readouterr().out
+    assert "2/2 fundamentals fetched, 0 failed" in stdout
+
+
+def test_fundamentals_respects_symbols_filter(tmp_path, monkeypatch):
+    cik_map = tmp_path / "us_stocks_cik.csv"
+    cik_map.write_text("symbol,cik\nAAPL.US,320193\nMSFT.US,789019\n", encoding="utf-8")
+
+    fake_client = _FakeSecFactsClient()
+    monkeypatch.setattr("xtb_analyzer.cli.SecFactsClient", lambda: fake_client)
+
+    out = tmp_path / "us_stocks_fundamentals.csv"
+    main(["fundamentals", "--cik-map", str(cik_map), "--output", str(out), "--symbols", "AAPL.US"])
+
+    assert fake_client.calls == [320193]

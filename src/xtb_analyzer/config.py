@@ -27,6 +27,10 @@ OHLCV_DIR = DATA_DIR / "ohlcv"
 #: the two universes are never conflated.
 US_STOCKS_CSV = DATA_DIR / "us_stocks.csv"
 US_STOCKS_META = DATA_DIR / "us_stocks.meta.json"
+US_STOCKS_CIK_CSV = DATA_DIR / "us_stocks_cik.csv"
+
+#: Stage 4 — raw fundamentals per company, via SEC EDGAR XBRL (us_stocks only).
+US_STOCKS_FUNDAMENTALS_CSV = DATA_DIR / "us_stocks_fundamentals.csv"
 
 WS_URLS = {
     "demo": "wss://ws.xtb.com/demo",

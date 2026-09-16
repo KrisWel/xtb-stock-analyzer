@@ -30,6 +30,7 @@ import logging
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -37,8 +38,13 @@ log = logging.getLogger(__name__)
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 
 #: SEC's fair-use policy requires a descriptive User-Agent identifying the
-#: caller; requests without one are frequently rejected with a 403.
-USER_AGENT = "xtb-stock-analyzer (personal research project; contact via GitHub issues)"
+#: caller, in practice something close to "Company/App name contact-info" —
+#: requests without one are frequently rejected with a 403. A vaguer one
+#: ("contact via GitHub issues", no concrete link) still got flagged live as
+#: an "Undeclared Automated Tool" on a bulk companyfacts run (see
+#: docs/PROGRESS.md) alongside SEC's IP-level traffic classification, so this
+#: includes a real, checkable contact URL.
+USER_AGENT = "xtb-stock-analyzer/0.1 (personal research project; https://github.com/KrisWel/xtb-stock-analyzer)"
 
 Getter = Callable[[str, dict[str, str]], bytes]
 
@@ -80,6 +86,39 @@ def to_symbol_record(entry: dict[str, Any]) -> dict[str, Any]:
         "currency": "USD",
         "currencyProfit": "USD",
     }
+
+
+@dataclass(frozen=True)
+class CikEntry:
+    """One symbol's SEC CIK (Central Index Key) — the id stage 4's fundamentals
+
+    lookup (:mod:`xtb_analyzer.fundamentals`) needs. Kept as its own small
+    sidecar file rather than a field on :class:`~xtb_analyzer.models.Instrument`,
+    since CIK is meaningless for the XTB-sourced universe.
+    """
+
+    symbol: str
+    cik: int
+
+    @classmethod
+    def csv_columns(cls) -> list[str]:
+        return ["symbol", "cik"]
+
+    def as_dict(self) -> dict[str, str]:
+        return {"symbol": self.symbol, "cik": str(self.cik)}
+
+
+def build_cik_map(entries: list[dict[str, Any]]) -> list[CikEntry]:
+    """Build the ``symbol -> CIK`` sidecar from the raw SEC ticker entries."""
+    result = []
+    for entry in entries:
+        ticker = str(entry.get("ticker", "")).strip().upper()
+        try:
+            cik = int(entry["cik_str"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        result.append(CikEntry(symbol=f"{ticker}.US", cik=cik))
+    return result
 
 
 def _urllib_get(url: str, headers: dict[str, str]) -> bytes:

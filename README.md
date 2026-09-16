@@ -4,11 +4,12 @@ Building blocks for a personal tool that tracks every instrument available on an
 **XTB** account and — later — scores each ticker as **buy / sell / hold** based on
 company fundamentals, history and technical indicators.
 
-> **Status: stage 3 of the roadmap.** The project downloads the full XTB instrument
+> **Status: stage 4 of the roadmap.** The project downloads the full XTB instrument
 > universe and reduces it to **cash equities and ETFs/ETNs only** (derivatives —
 > stock CFDs, index CFDs, FX, commodities, crypto — are deliberately excluded), maps
-> each surviving symbol onto a Yahoo Finance ticker and, optionally, a FIGI, then
-> pulls and incrementally refreshes OHLCV history per instrument. No XTB account
+> each surviving symbol onto a Yahoo Finance ticker and, optionally, a FIGI, pulls and
+> incrementally refreshes OHLCV history per instrument, and (US-listed stocks only)
+> fetches raw company fundamentals from each filer's own SEC filings. No XTB account
 > available? `fetch-sec` is a login-free alternative universe (US-listed stocks via
 > SEC EDGAR) that the rest of the pipeline works with unchanged — see below.
 
@@ -85,9 +86,13 @@ xtb-analyzer ohlcv                    # first run: full --range history; later r
 xtb-analyzer ohlcv --range 1y --symbols AAPL.US CDR.PL
 
 # no XTB account? alternative, login-free universe: US-listed stocks via SEC EDGAR
-xtb-analyzer fetch-sec
+xtb-analyzer fetch-sec   # also writes data/us_stocks_cik.csv, the symbol -> CIK sidecar stage 4 needs
 xtb-analyzer map --snapshot data/us_stocks.csv --output data/us_stocks_identity_map.csv
 xtb-analyzer ohlcv --identity-map data/us_stocks_identity_map.csv --output-dir data/us_stocks_ohlcv
+
+# stage 4: raw fundamentals per company via SEC EDGAR XBRL (us_stocks universe only)
+xtb-analyzer fundamentals
+xtb-analyzer fundamentals --symbols AAPL.US MSFT.US
 ```
 
 Sample output:
@@ -174,6 +179,45 @@ Worth knowing before treating this as equivalent to the real XTB universe:
 `--snapshot`/`--identity-map`/`--output-dir` at the `us_stocks*` paths, as in the
 Usage section above.
 
+## Fundamentals (stage 4, `us_stocks` universe only)
+
+`xtb_analyzer/fundamentals.py` pulls each company's own structured financial data
+straight from its SEC filings — the free, no-login, no-API-key
+`https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json` endpoint — keyed by the CIK
+`fetch-sec` already writes to `data/us_stocks_cik.csv`. It's a fallback for the same
+reason `sec_edgar.py` is: no XTB account has been available in any session, and this
+needs none either.
+
+```bash
+xtb-analyzer fundamentals
+```
+
+* **Duration figures** (revenue, net income, gross profit, diluted EPS) use the most
+  recent full fiscal year from a 10-K, plus the prior FY for a simple year-over-year
+  growth figure.
+* **Balance-sheet figures** (total assets, total liabilities, stockholders' equity) use
+  whichever filing is most recent — a balance sheet is a snapshot, not a period.
+* Not every filer tags the same line item under the same US GAAP concept name (taxonomy
+  migrations, company-specific choices), so each metric tries a short list of concept
+  names. **Verified live and fixed once already**: naively taking the *first present*
+  concept name is wrong — Apple's facts still carry the legacy `Revenues` concept
+  (stale since FY2018, when it adopted ASC 606) alongside the current
+  `RevenueFromContractWithCustomerExcludingAssessedTax`; picking whichever is *present*
+  paired a seven-year-stale revenue with a fresh net income. `fundamentals.py` compares
+  every candidate concept's recency and keeps the most current one — see the regression
+  test in `tests/test_fundamentals.py` and `docs/PROGRESS.md`.
+* Stores raw filed numbers, not ratios — `Fundamentals.net_margin`, `.gross_margin`,
+  `.revenue_growth`, `.net_income_growth`, `.liabilities_to_equity` compute them on
+  demand so the CSV and the computation can't drift apart.
+* **SEC's bot detection is stricter than its published rate limit.** A sequential
+  50-request run at 1 request/second — under the documented 10 req/s cap — got the
+  whole session flagged `"Your Request Originates from an Undeclared Automated Tool"`,
+  a harsher, IP-reputation-based block requiring roughly a 10-minute cooldown, not the
+  ordinary `429`. Expect a bulk run of the full `us_stocks` universe to need real
+  patience (a conservative throttle and tolerance for occasional cooldowns), not a
+  single unattended sitting — see `docs/PROGRESS.md` for what a live attempt looked
+  like.
+
 ## Outputs
 
 | Path | Committed | Contents |
@@ -184,8 +228,10 @@ Usage section above.
 | `data/identity_map.csv` | yes | symbol -> Yahoo Finance ticker, and FIGI when `--figi` was used |
 | `data/ohlcv/<ticker>.csv` | yes | OHLCV bar history per instrument, incrementally refreshed |
 | `data/us_stocks.csv` + `.meta.json` | yes | `fetch-sec`'s login-free alternative universe (US-listed stocks) |
+| `data/us_stocks_cik.csv` | yes | symbol -> SEC CIK sidecar, written by `fetch-sec` |
 | `data/us_stocks_identity_map.csv` | yes | identity map for the `us_stocks` universe |
 | `data/us_stocks_ohlcv/<ticker>.csv` | yes | OHLCV history for the 50 largest `us_stocks` companies (by SEC's own ordering) |
+| `data/us_stocks_fundamentals.csv` | yes | raw fundamentals per company, via SEC EDGAR XBRL (partial — see `docs/PROGRESS.md`) |
 
 `data/instruments.csv` doubles as the **fallback**: `xtb-analyzer show` and any later
 analysis step can run from it with no XTB login at all. Commit it after each refresh
@@ -205,8 +251,9 @@ src/xtb_analyzer/
   openfigi.py    stage 2: optional FIGI lookup via the OpenFIGI API (network)
   market_data.py stage 3: OHLCV bars via Yahoo Finance, incremental merge
   sec_edgar.py   login-free alternative universe: US-listed stocks via SEC EDGAR
-  storage.py     CSV snapshot, identity map, OHLCV, metadata, raw dump I/O
-  cli.py         fetch / fetch-sec / inspect / show / map / ohlcv
+  fundamentals.py stage 4: raw company fundamentals via SEC EDGAR XBRL
+  storage.py     CSV snapshot, identity map, OHLCV, fundamentals, metadata, raw dump I/O
+  cli.py         fetch / fetch-sec / inspect / show / map / ohlcv / fundamentals
 tests/           pytest suite driven by a fixture payload — runs without an XTB account
 docs/            API notes and progress log
 ```
@@ -214,7 +261,7 @@ docs/            API notes and progress log
 ## Development
 
 ```bash
-pytest            # 62 tests, no network or credentials required
+pytest            # 79 tests, no network or credentials required
 ruff check .
 ruff format .
 ```
@@ -226,7 +273,7 @@ CI runs the same three commands on every push and pull request.
 - [x] **1. Instrument universe** — fetch, filter to cash stocks + ETFs/ETNs, snapshot
 - [x] **2. Identity mapping** — map XTB symbols to FIGI / external data-provider tickers
 - [x] **3. Market data** — OHLCV history per instrument, incremental refresh, local store
-- [ ] **4. Fundamentals** — valuation, profitability, growth, balance-sheet metrics
+- [x] **4. Fundamentals** — valuation, profitability, growth, balance-sheet metrics
 - [ ] **5. Technicals** — trend, momentum, volatility indicators
 - [ ] **6. Scoring** — combine into a transparent buy / sell / hold verdict with rationale
 - [ ] **7. Portfolio view** — overlay actual XTB holdings and report per-position condition

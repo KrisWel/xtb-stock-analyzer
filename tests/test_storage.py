@@ -2,13 +2,19 @@ import json
 from collections import Counter
 
 from xtb_analyzer.filters import filter_instruments
+from xtb_analyzer.fundamentals import Fundamentals
 from xtb_analyzer.identity import map_instruments
 from xtb_analyzer.market_data import Bar
+from xtb_analyzer.sec_edgar import CikEntry
 from xtb_analyzer.storage import (
+    read_cik_map,
+    read_fundamentals,
     read_identity_map,
     read_ohlcv,
     read_raw,
     read_snapshot,
+    write_cik_map,
+    write_fundamentals,
     write_identity_map,
     write_metadata,
     write_ohlcv,
@@ -87,3 +93,50 @@ def test_ohlcv_round_trip_sorts_by_date(tmp_path):
 
 def test_read_ohlcv_missing_file_returns_empty(tmp_path):
     assert read_ohlcv(tmp_path / "does-not-exist.csv") == []
+
+
+def test_cik_map_round_trip(tmp_path):
+    original = [CikEntry(symbol="AAPL.US", cik=320193), CikEntry(symbol="MSFT.US", cik=789019)]
+    path = write_cik_map(original, tmp_path / "us_stocks_cik.csv")
+
+    assert read_cik_map(path) == original
+
+
+def test_fundamentals_round_trip_preserves_values_and_none(tmp_path):
+    original = [
+        Fundamentals(
+            symbol="AAPL.US",
+            cik=320193,
+            fiscal_year=2025,
+            fiscal_year_end="2025-09-30",
+            revenue=1200.0,
+            revenue_prior_year=1000.0,
+            net_income=150.0,
+            net_income_prior_year=100.0,
+            gross_profit=500.0,
+            total_assets=5000.0,
+            total_liabilities=2000.0,
+            stockholders_equity=3000.0,
+            eps_diluted=6.5,
+        ),
+        Fundamentals(
+            symbol="EMPTY.US",
+            cik=1,
+            fiscal_year=None,
+            fiscal_year_end=None,
+            revenue=None,
+            revenue_prior_year=None,
+            net_income=None,
+            net_income_prior_year=None,
+            gross_profit=None,
+            total_assets=None,
+            total_liabilities=None,
+            stockholders_equity=None,
+            eps_diluted=None,
+        ),
+    ]
+    path = write_fundamentals(original, tmp_path / "us_stocks_fundamentals.csv")
+
+    restored = read_fundamentals(path)
+
+    assert restored == original
