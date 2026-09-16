@@ -209,14 +209,15 @@ xtb-analyzer fundamentals
 * Stores raw filed numbers, not ratios — `Fundamentals.net_margin`, `.gross_margin`,
   `.revenue_growth`, `.net_income_growth`, `.liabilities_to_equity` compute them on
   demand so the CSV and the computation can't drift apart.
-* **SEC's bot detection is stricter than its published rate limit.** A sequential
-  50-request run at 1 request/second — under the documented 10 req/s cap — got the
-  whole session flagged `"Your Request Originates from an Undeclared Automated Tool"`,
-  a harsher, IP-reputation-based block requiring roughly a 10-minute cooldown, not the
-  ordinary `429`. Expect a bulk run of the full `us_stocks` universe to need real
-  patience (a conservative throttle and tolerance for occasional cooldowns), not a
-  single unattended sitting — see `docs/PROGRESS.md` for what a live attempt looked
-  like.
+* **SEC's bot detection is stricter than its published rate limit, and can outlast a
+  well-behaved throttle.** A sequential 50-request run at 1 request/second — under the
+  documented 10 req/s cap — got flagged `"Your Request Originates from an Undeclared
+  Automated Tool"`, a harsher, IP-reputation-based block than the ordinary `429`. It
+  held even after a 12-minute cooldown with zero further requests, which points at the
+  block being scoped to a **shared egress IP** (other tenants of the same cloud sandbox
+  keeping the aggregate rate up) rather than this session's own history. Bulk-fetching
+  `us_stocks_fundamentals.csv` is realistically a job for a machine with its own,
+  unshared IP — see `docs/PROGRESS.md` for the full account.
 
 ## Outputs
 
