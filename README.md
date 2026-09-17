@@ -4,14 +4,17 @@ Building blocks for a personal tool that tracks every instrument available on an
 **XTB** account and — later — scores each ticker as **buy / sell / hold** based on
 company fundamentals, history and technical indicators.
 
-> **Status: stage 4 of the roadmap.** The project downloads the full XTB instrument
+> **Status: stage 5 of the roadmap.** The project downloads the full XTB instrument
 > universe and reduces it to **cash equities and ETFs/ETNs only** (derivatives —
 > stock CFDs, index CFDs, FX, commodities, crypto — are deliberately excluded), maps
 > each surviving symbol onto a Yahoo Finance ticker and, optionally, a FIGI, pulls and
-> incrementally refreshes OHLCV history per instrument, and (US-listed stocks only)
-> fetches raw company fundamentals from each filer's own SEC filings. No XTB account
-> available? `fetch-sec` is a login-free alternative universe (US-listed stocks via
-> SEC EDGAR) that the rest of the pipeline works with unchanged — see below.
+> incrementally refreshes OHLCV history per instrument, fetches raw company
+> fundamentals where a free source has them, and computes trend/momentum/volatility
+> indicators from the stored OHLCV. No XTB account available? Two login-free
+> alternative universes cover the rest of the pipeline unchanged: `fetch-sec` (US-listed
+> stocks via SEC EDGAR) and `fetch-gpw` (PLN-denominated stocks + ETFs on the Warsaw
+> Stock Exchange) — see below. **Every session tries to refresh as much of the GPW
+> universe as possible — see `CLAUDE.md`.**
 
 ---
 
@@ -93,6 +96,14 @@ xtb-analyzer ohlcv --identity-map data/us_stocks_identity_map.csv --output-dir d
 # stage 4: raw fundamentals per company via SEC EDGAR XBRL (us_stocks universe only)
 xtb-analyzer fundamentals
 xtb-analyzer fundamentals --symbols AAPL.US MSFT.US
+
+# another login-free alternative universe: PLN-denominated stocks + ETFs on GPW
+xtb-analyzer fetch-gpw   # also writes data/gpw_isin.csv (real ISINs, straight from GPW)
+xtb-analyzer map --snapshot data/gpw_instruments.csv --output data/gpw_identity_map.csv --figi
+xtb-analyzer ohlcv --identity-map data/gpw_identity_map.csv --output-dir data/gpw_ohlcv
+
+# stage 5: trend/momentum/volatility indicators from stored OHLCV (any universe)
+xtb-analyzer technicals --ohlcv-dir data/gpw_ohlcv --output data/gpw_technicals.csv
 ```
 
 Sample output:
@@ -219,6 +230,68 @@ xtb-analyzer fundamentals
   `us_stocks_fundamentals.csv` is realistically a job for a machine with its own,
   unshared IP — see `docs/PROGRESS.md` for the full account.
 
+## Another login-free universe: `fetch-gpw` — PLN stocks + ETFs on GPW
+
+`xtb_analyzer/gpw.py` covers the Warsaw Stock Exchange's Main Market
+(**Główny Rynek**) — every PLN-denominated stock and ETF quoted there, no account, no
+API key, two requests total:
+
+* **Stocks** — a GET to `gpw.pl/spolki?limit=1000&offset=0` returns the whole company
+  list (ticker, name, ISIN) server-rendered in one page. Verified live (2026-09-17):
+  402 companies, one request.
+* **ETFs** — a POST to `gpw.pl/ajaxindex.php` (`action=GPWQuotationsETF&start=ajaxList
+  &page=etfy`, the same call the site's own `/etfy` search form makes) returns every
+  GPW-listed ETF, including foreign-domiciled ones cross-listed and quoted on GPW in
+  PLN — a DAX tracker, an S&P 500 tracker, etc. Verified live: 40 ETFs, ISIN and
+  currency both explicit in the response, every one PLN.
+
+```bash
+xtb-analyzer fetch-gpw   # -> data/gpw_instruments.csv, data/gpw_isin.csv
+```
+
+* **Every Główny Rynek equity is PLN-denominated, even foreign issuers** — verified
+  live via Yahoo Finance: AmRest (a Spanish ISIN) trades as `EAT.WA` in PLN, same as
+  any Polish-domiciled company.
+* Real **ISIN**, not just a ticker — GPW's own pages give it directly, so this universe
+  doesn't need OpenFIGI's FIGI at all for that (though `map --figi` still works the same
+  way as any other universe, if wanted alongside).
+* Both `gpw.pl` endpoints are undocumented HTML/AJAX internals, not a public API — same
+  caution as `market_data.py`'s Yahoo endpoint and `openfigi.py`'s exchange-code table.
+* Unlike the US/SEC universe (10k+ symbols, deliberately scoped down for `ohlcv`), the
+  GPW universe (~440 instruments) is small enough that a **full** OHLCV backfill
+  completes in one sitting — see `CLAUDE.md` for the standing instruction to do exactly
+  that every session.
+
+`map` and `ohlcv` work unchanged against this universe too — point `--snapshot` /
+`--identity-map` / `--output-dir` at the `gpw_*` paths, as in Usage above.
+
+## Technical indicators (stage 5)
+
+`xtb_analyzer/technicals.py` computes trend, momentum and volatility indicators purely
+from OHLCV bars already on disk — no network, works against any of the OHLCV
+directories the project produces.
+
+```bash
+xtb-analyzer technicals --ohlcv-dir data/gpw_ohlcv --output data/gpw_technicals.csv
+```
+
+One row per instrument, the **latest** value of each indicator (not a full time
+series — see the module docstring if a per-bar series is ever needed, the
+`*_series` functions underneath already compute one):
+
+| Indicator | Kind | Notes |
+|---|---|---|
+| SMA 20 / 50 / 200 | trend | simple moving average; 200 needs 200 bars of history |
+| EMA 12 / 26 | trend | exponential moving average, seeded with the SMA |
+| RSI 14 | momentum | Wilder's original smoothing (not a plain EMA) |
+| MACD (12/26/9) + signal + histogram | trend/momentum | standard MACD |
+| Bollinger Bands (20, 2σ) | volatility | SMA 20 ± 2 sample standard deviations |
+| ATR 14 | volatility | Wilder-smoothed average true range |
+
+Instruments with fewer than 20 bars of history are skipped entirely (nothing here means
+anything with less); an instrument with, say, 60 bars still gets SMA 20/50, RSI, MACD
+and Bollinger values — SMA 200 just stays `None` until there's enough history.
+
 ## Outputs
 
 | Path | Committed | Contents |
@@ -233,6 +306,11 @@ xtb-analyzer fundamentals
 | `data/us_stocks_identity_map.csv` | yes | identity map for the `us_stocks` universe |
 | `data/us_stocks_ohlcv/<ticker>.csv` | yes | OHLCV history for the 50 largest `us_stocks` companies (by SEC's own ordering) |
 | `data/us_stocks_fundamentals.csv` | yes | raw fundamentals per company, via SEC EDGAR XBRL (partial — see `docs/PROGRESS.md`) |
+| `data/gpw_instruments.csv` + `.meta.json` | yes | `fetch-gpw`'s login-free universe (PLN stocks + ETFs on GPW) |
+| `data/gpw_isin.csv` | yes | symbol -> real ISIN sidecar, straight from GPW |
+| `data/gpw_identity_map.csv` | yes | identity map for the `gpw` universe (Yahoo ticker + FIGI) |
+| `data/gpw_ohlcv/<ticker>.csv` | yes | OHLCV history for the `gpw` universe — full coverage, not a subset |
+| `data/gpw_technicals.csv` | yes | latest trend/momentum/volatility indicators for the `gpw` universe |
 
 `data/instruments.csv` doubles as the **fallback**: `xtb-analyzer show` and any later
 analysis step can run from it with no XTB login at all. Commit it after each refresh
@@ -253,8 +331,11 @@ src/xtb_analyzer/
   market_data.py stage 3: OHLCV bars via Yahoo Finance, incremental merge
   sec_edgar.py   login-free alternative universe: US-listed stocks via SEC EDGAR
   fundamentals.py stage 4: raw company fundamentals via SEC EDGAR XBRL
-  storage.py     CSV snapshot, identity map, OHLCV, fundamentals, metadata, raw dump I/O
-  cli.py         fetch / fetch-sec / inspect / show / map / ohlcv / fundamentals
+  gpw.py         login-free alternative universe: PLN stocks + ETFs on GPW
+  technicals.py  stage 5: trend/momentum/volatility indicators from stored OHLCV
+  storage.py     CSV snapshot, identity map, OHLCV, fundamentals, technicals I/O
+  cli.py         fetch / fetch-sec / fetch-gpw / inspect / show / map / ohlcv /
+                 fundamentals / technicals
 tests/           pytest suite driven by a fixture payload — runs without an XTB account
 docs/            API notes and progress log
 ```
@@ -262,7 +343,7 @@ docs/            API notes and progress log
 ## Development
 
 ```bash
-pytest            # 79 tests, no network or credentials required
+pytest            # 105 tests, no network or credentials required
 ruff check .
 ruff format .
 ```
@@ -275,7 +356,7 @@ CI runs the same three commands on every push and pull request.
 - [x] **2. Identity mapping** — map XTB symbols to FIGI / external data-provider tickers
 - [x] **3. Market data** — OHLCV history per instrument, incremental refresh, local store
 - [x] **4. Fundamentals** — valuation, profitability, growth, balance-sheet metrics
-- [ ] **5. Technicals** — trend, momentum, volatility indicators
+- [x] **5. Technicals** — trend, momentum, volatility indicators
 - [ ] **6. Scoring** — combine into a transparent buy / sell / hold verdict with rationale
 - [ ] **7. Portfolio view** — overlay actual XTB holdings and report per-position condition
 

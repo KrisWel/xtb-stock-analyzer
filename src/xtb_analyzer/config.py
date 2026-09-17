@@ -32,6 +32,16 @@ US_STOCKS_CIK_CSV = DATA_DIR / "us_stocks_cik.csv"
 #: Stage 4 — raw fundamentals per company, via SEC EDGAR XBRL (us_stocks only).
 US_STOCKS_FUNDAMENTALS_CSV = DATA_DIR / "us_stocks_fundamentals.csv"
 
+#: Alternative, login-free universe: PLN-denominated stocks + ETFs quoted on
+#: GPW's Main Market — see xtb_analyzer.gpw. Kept separate from the other
+#: universes above so none of them get conflated.
+GPW_INSTRUMENTS_CSV = DATA_DIR / "gpw_instruments.csv"
+GPW_INSTRUMENTS_META = DATA_DIR / "gpw_instruments.meta.json"
+GPW_ISIN_CSV = DATA_DIR / "gpw_isin.csv"
+GPW_OHLCV_DIR = DATA_DIR / "gpw_ohlcv"
+GPW_IDENTITY_MAP_CSV = DATA_DIR / "gpw_identity_map.csv"
+GPW_TECHNICALS_CSV = DATA_DIR / "gpw_technicals.csv"
+
 WS_URLS = {
     "demo": "wss://ws.xtb.com/demo",
     "real": "wss://ws.xtb.com/real",

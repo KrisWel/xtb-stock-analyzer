@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from xtb_analyzer.cli import main
 from xtb_analyzer.market_data import Bar
@@ -75,6 +76,40 @@ def test_fetch_sec_writes_snapshot_without_xtb_credentials(tmp_path, monkeypatch
     assert json.loads(meta.read_text())["instruments_kept"] == 2
     cik_rows = cik_out.read_text(encoding="utf-8").splitlines()
     assert "AAPL.US,320193" in cik_rows
+
+
+def test_fetch_gpw_writes_snapshot_with_stocks_and_etfs(tmp_path, monkeypatch, capsys):
+    stocks_html = (Path(__file__).parent / "fixtures" / "gpw_stocks_sample.html").read_text(
+        encoding="utf-8"
+    )
+    etf_html = (Path(__file__).parent / "fixtures" / "gpw_etf_sample.html").read_text(
+        encoding="utf-8"
+    )
+    monkeypatch.setattr("xtb_analyzer.cli.fetch_stocks_html", lambda: stocks_html)
+    monkeypatch.setattr("xtb_analyzer.cli.fetch_etf_html", lambda: etf_html)
+
+    out = tmp_path / "gpw_instruments.csv"
+    meta = tmp_path / "gpw_instruments.meta.json"
+    isin_out = tmp_path / "gpw_isin.csv"
+    exit_code = main(
+        [
+            "fetch-gpw",
+            "--output",
+            str(out),
+            "--metadata",
+            str(meta),
+            "--isin-output",
+            str(isin_out),
+        ]
+    )
+
+    assert exit_code == 0
+    rows = out.read_text(encoding="utf-8").splitlines()
+    assert any(row.startswith("11B.PL,") for row in rows[1:])
+    assert any(row.startswith("ETFBCASH.PL,") for row in rows[1:])
+    assert json.loads(meta.read_text())["instruments_kept"] == 5  # 3 stocks + 2 ETFs
+    isin_rows = isin_out.read_text(encoding="utf-8").splitlines()
+    assert "11B.PL,PL11BTS00015" in isin_rows
 
 
 def test_inspect_from_raw(sample_records_path, capsys):
@@ -227,3 +262,24 @@ def test_fundamentals_respects_symbols_filter(tmp_path, monkeypatch):
     main(["fundamentals", "--cik-map", str(cik_map), "--output", str(out), "--symbols", "AAPL.US"])
 
     assert fake_client.calls == [320193]
+
+
+def test_technicals_computes_for_instruments_with_enough_history(tmp_path, capsys):
+    ohlcv_dir = tmp_path / "ohlcv"
+    ohlcv_dir.mkdir()
+    rows = "date,open,high,low,close,volume\n" + "\n".join(
+        f"2026-01-{i + 1:02d},{100 + i},{101 + i},{99 + i},{100 + i},1000" for i in range(25)
+    )
+    (ohlcv_dir / "AAPL.csv").write_text(rows + "\n", encoding="utf-8")
+    short_rows = "date,open,high,low,close,volume\n2026-01-01,10,11,9,10,100\n"
+    (ohlcv_dir / "TOO_SHORT.csv").write_text(short_rows, encoding="utf-8")
+
+    out = tmp_path / "technicals.csv"
+    exit_code = main(["technicals", "--ohlcv-dir", str(ohlcv_dir), "--output", str(out)])
+
+    assert exit_code == 0
+    rows = out.read_text(encoding="utf-8").splitlines()
+    assert any(row.startswith("AAPL,") for row in rows[1:])
+    assert not any(row.startswith("TOO_SHORT,") for row in rows[1:])
+    stdout = capsys.readouterr().out
+    assert "1/2 instruments computed, 1 skipped" in stdout

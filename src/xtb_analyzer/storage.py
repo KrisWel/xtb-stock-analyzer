@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from .fundamentals import Fundamentals
+from .gpw import IsinEntry
 from .identity import IdentityMapping
 from .market_data import Bar
 from .models import Instrument
 from .sec_edgar import CikEntry
+from .technicals import Technicals
 
 BOOL_FIELDS = {"long_only", "short_selling"}
 INT_FIELDS = {"precision", "margin_mode", "instrument_type"}
@@ -187,6 +189,66 @@ def _row_to_fundamentals(row: dict[str, str]) -> Fundamentals:
         raw = row.get(column, "")
         values[column] = float(raw) if raw else None
     return Fundamentals(**values)
+
+
+def write_isin_map(entries: Iterable[IsinEntry], path: Path) -> Path:
+    """Write the ``symbol -> ISIN`` sidecar for the ``gpw`` universe."""
+    entries = list(entries)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=IsinEntry.csv_columns())
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow(entry.as_dict())
+    return path
+
+
+def read_isin_map(path: Path) -> list[IsinEntry]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [IsinEntry(symbol=row["symbol"], isin=row["isin"]) for row in csv.DictReader(handle)]
+
+
+def write_technicals(rows: Iterable[Technicals], path: Path) -> Path:
+    """Write one CSV row of latest indicator values per instrument."""
+    rows = list(rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=Technicals.csv_columns())
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row.as_dict())
+    return path
+
+
+def read_technicals(path: Path) -> list[Technicals]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [_row_to_technicals(row) for row in csv.DictReader(handle)]
+
+
+_TECHNICALS_FLOAT_FIELDS = {
+    "close",
+    "sma_20",
+    "sma_50",
+    "sma_200",
+    "ema_12",
+    "ema_26",
+    "rsi_14",
+    "macd",
+    "macd_signal",
+    "macd_histogram",
+    "bb_upper",
+    "bb_middle",
+    "bb_lower",
+    "atr_14",
+}
+
+
+def _row_to_technicals(row: dict[str, str]) -> Technicals:
+    values: dict[str, Any] = {"symbol": row["symbol"], "date": row["date"]}
+    for column in _TECHNICALS_FLOAT_FIELDS:
+        raw = row.get(column, "")
+        values[column] = float(raw) if raw else None
+    return Technicals(**values)
 
 
 def _row_to_instrument(row: dict[str, str]) -> Instrument:
