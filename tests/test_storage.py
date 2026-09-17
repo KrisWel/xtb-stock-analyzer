@@ -3,6 +3,7 @@ from collections import Counter
 
 from xtb_analyzer.filters import filter_instruments
 from xtb_analyzer.fundamentals import Fundamentals
+from xtb_analyzer.gpw import IsinEntry
 from xtb_analyzer.identity import map_instruments
 from xtb_analyzer.market_data import Bar
 from xtb_analyzer.sec_edgar import CikEntry
@@ -10,17 +11,22 @@ from xtb_analyzer.storage import (
     read_cik_map,
     read_fundamentals,
     read_identity_map,
+    read_isin_map,
     read_ohlcv,
     read_raw,
     read_snapshot,
+    read_technicals,
     write_cik_map,
     write_fundamentals,
     write_identity_map,
+    write_isin_map,
     write_metadata,
     write_ohlcv,
     write_raw,
     write_snapshot,
+    write_technicals,
 )
+from xtb_analyzer.technicals import Technicals
 
 
 def test_snapshot_round_trip_preserves_values(tmp_path, sample_records):
@@ -140,3 +146,39 @@ def test_fundamentals_round_trip_preserves_values_and_none(tmp_path):
     restored = read_fundamentals(path)
 
     assert restored == original
+
+
+def test_isin_map_round_trip(tmp_path):
+    original = [
+        IsinEntry(symbol="11B.PL", isin="PL11BTS00015"),
+        IsinEntry(symbol="EAT.PL", isin="ES0105375002"),
+    ]
+    path = write_isin_map(original, tmp_path / "gpw_isin.csv")
+
+    assert read_isin_map(path) == original
+
+
+def test_technicals_round_trip_preserves_values_and_none(tmp_path):
+    original = [
+        Technicals(
+            symbol="AAPL.US",
+            date="2026-09-16",
+            close=333.08,
+            sma_20=320.0,
+            sma_50=310.0,
+            sma_200=None,
+            ema_12=325.0,
+            ema_26=318.0,
+            rsi_14=62.5,
+            macd=7.0,
+            macd_signal=5.5,
+            macd_histogram=1.5,
+            bb_upper=340.0,
+            bb_middle=320.0,
+            bb_lower=300.0,
+            atr_14=8.25,
+        )
+    ]
+    path = write_technicals(original, tmp_path / "technicals.csv")
+
+    assert read_technicals(path) == original

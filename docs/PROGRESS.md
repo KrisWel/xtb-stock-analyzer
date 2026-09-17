@@ -247,3 +247,72 @@ line with Apple's actual reported FY2025 results.
   IP — a personal computer, not this kind of shared sandbox — at a conservative pace.
 * Stage 5: technicals (trend, momentum, volatility indicators) — can build directly on
   the OHLCV data already committed.
+
+## 2026-09-17 — stage 5 (technicals), a third login-free universe (GPW), and a standing data-maximization instruction
+
+The project owner asked for two things together: build stage 5, and from now on, every
+session should fetch/refresh as much free, login-free data as possible, prioritizing
+**Polish (GPW) stocks in PLN plus ETFs (global exposure OK)**. Recorded as a standing
+instruction in the new `CLAUDE.md` so it survives across sessions, not just this log.
+
+**Done — `gpw.py`, a third login-free universe**
+
+* Found two clean, undocumented-but-real GPW endpoints, both server-rendered (no
+  JavaScript needed) and verified live:
+  - **Stocks**: `gpw.pl/spolki?limit=1000&offset=0` — one GET returns the entire
+    Główny Rynek (Main Market) company list, ticker/name/ISIN embedded in plain HTML.
+    402 companies, one request.
+  - **ETFs**: a POST to `gpw.pl/ajaxindex.php` with
+    `action=GPWQuotationsETF&start=ajaxList&page=etfy` — the exact call the site's own
+    `/etfy` search form makes (found by reading the page's inline JS) — returns every
+    GPW-listed ETF, ISIN and currency both explicit. 40 ETFs, every one PLN, including
+    foreign-domiciled trackers (DAX, S&P 500, Nasdaq, ...) cross-listed on GPW.
+  - Verified live via Yahoo Finance that Główny Rynek is uniformly PLN-denominated even
+    for foreign issuers: AmRest (Spanish ISIN) trades as `EAT.WA` in PLN.
+* New `xtb-analyzer fetch-gpw` command, `sec_edgar.py`-style `CikEntry`-alike sidecar
+  (`gpw.IsinEntry` / `build_isin_map`) since GPW hands over a real ISIN directly — no
+  OpenFIGI FIGI lookup needed for this universe's identifiers, unlike the XTB one.
+* **Real, live-fetched data committed**: `data/gpw_instruments.csv` (442 instruments:
+  402 stocks + 40 ETFs), `data/gpw_isin.csv`, `data/gpw_identity_map.csv` (442/442
+  Yahoo tickers, 403/442 real FIGIs via OpenFIGI — no rate-limit trouble this time,
+  since the batch-size fix from the previous entry already caps requests at 10 without
+  a key), and `data/gpw_ohlcv/*.csv` — a **full** backfill, 438/442 symbols (4 failed
+  with a genuine `404` from Yahoo — likely too new/thinly-traded to be indexed there
+  yet), ~39 MB, took under 4 minutes. Unlike the 10,422-symbol US/SEC universe, GPW's
+  ~440 instruments are small enough to backfill completely in one sitting — no need to
+  scope down to a subset the way `us_stocks_ohlcv` was.
+
+**Done — stage 5: `technicals.py`**
+
+* Pure computation over stored OHLCV, no network: `sma_series`, `ema_series`,
+  `rsi_series` (Wilder's original smoothing, not a plain EMA), `macd_series` (12/26/9),
+  `bollinger_bands_series` (20-period, 2 std dev), `atr_series` (Wilder-smoothed true
+  range) — each returns one value per bar, `None` wherever there isn't enough history
+  yet. `compute_technicals` takes the latest value of each into one
+  per-instrument snapshot row, same shape as stage 4's `Fundamentals`.
+* New `xtb-analyzer technicals --ohlcv-dir <dir> --output <csv>` command — generic,
+  works against any OHLCV directory the project produces, not tied to one universe.
+  Instruments with under 20 bars of history are skipped (nothing meaningful to
+  compute); a longer indicator like SMA 200 just stays `None` for shorter histories
+  rather than skipping the whole row.
+* **Real output**: `data/gpw_technicals.csv` — 426/438 GPW instruments with enough
+  history got a full row (12 skipped, too little history — likely recent IPOs).
+* 26 new tests (105 total: `test_gpw.py`, `test_technicals.py`, plus storage/CLI
+  round-trips), hand-checked reference values where the math allows it (a strictly
+  rising/falling series pins RSI at exactly 100/0; constant prices collapse MACD and
+  the Bollinger bands to zero-width/zero; a constant high-low span pins ATR exactly).
+  Still no network or credentials required to run the suite.
+
+**Next**
+
+* Keep re-running the `gpw` pipeline (`fetch-gpw` → `map --figi` → `ohlcv` →
+  `technicals`) every session per the new standing instruction in `CLAUDE.md` —
+  `ohlcv` is incremental, so repeated runs stay cheap.
+* Backfill the 4 symbols that 404'd from Yahoo once they're indexed there, and the
+  12 that were too short for `technicals` once they accumulate more history.
+* Stage 6: scoring — combine fundamentals + technicals into a transparent buy/sell/hold
+  verdict with rationale. The `gpw` universe now has both real fundamentals... no,
+  wait — `fundamentals.py` is SEC-XBRL-specific (US filers only); GPW-listed companies
+  file differently (KNF/ESPI, no free structured XBRL-equivalent found yet). Stage 6
+  can combine technicals + whatever fundamentals exist per universe, but a GPW
+  fundamentals source is still an open question, not yet solved.

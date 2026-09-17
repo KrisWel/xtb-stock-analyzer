@@ -14,6 +14,9 @@ from typing import Any
 
 from . import __version__
 from .config import (
+    GPW_INSTRUMENTS_CSV,
+    GPW_INSTRUMENTS_META,
+    GPW_ISIN_CSV,
     IDENTITY_MAP_CSV,
     OHLCV_DIR,
     RAW_DIR,
@@ -29,6 +32,16 @@ from .config import (
 )
 from .filters import FilterConfig, describe_universe, filter_instruments
 from .fundamentals import FundamentalsError, SecFactsClient, extract_fundamentals
+from .gpw import (
+    GpwError,
+    build_isin_map,
+    etf_to_symbol_record,
+    fetch_etf_html,
+    fetch_stocks_html,
+    parse_etfs,
+    parse_stocks,
+    stock_to_symbol_record,
+)
 from .identity import map_instruments
 from .market_data import YahooChartClient, YahooFinanceError, merge_bars, safe_filename
 from .openfigi import OpenFigiClient, OpenFigiError, build_jobs
@@ -42,11 +55,14 @@ from .storage import (
     write_cik_map,
     write_fundamentals,
     write_identity_map,
+    write_isin_map,
     write_metadata,
     write_ohlcv,
     write_raw,
     write_snapshot,
+    write_technicals,
 )
+from .technicals import compute_technicals
 from .xtb_client import XtbApiError, XtbClient
 
 RAW_SYMBOLS = RAW_DIR / "all_symbols.json"
@@ -85,6 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     except FundamentalsError as exc:
         log.error("Fundamentals error: %s", exc)
         return 8
+    except GpwError as exc:
+        log.error("GPW error: %s", exc)
+        return 9
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,6 +143,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="symbol -> CIK sidecar for stage 4",
     )
     fetch_sec.set_defaults(handler=cmd_fetch_sec)
+
+    fetch_gpw = sub.add_parser(
+        "fetch-gpw",
+        help="alternative, login-free universe: PLN-denominated GPW stocks + ETFs",
+    )
+    fetch_gpw.add_argument("--output", type=Path, default=GPW_INSTRUMENTS_CSV)
+    fetch_gpw.add_argument("--metadata", type=Path, default=GPW_INSTRUMENTS_META)
+    fetch_gpw.add_argument(
+        "--isin-output", type=Path, default=GPW_ISIN_CSV, help="symbol -> ISIN sidecar"
+    )
+    fetch_gpw.set_defaults(handler=cmd_fetch_gpw)
 
     inspect = sub.add_parser("inspect", help="show field distributions used to tune the filters")
     inspect.add_argument("--from-raw", type=Path, default=RAW_SYMBOLS, help="raw dump to analyse")
@@ -179,6 +209,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--symbols", nargs="*", help="limit to these symbols (default: every symbol in the CIK map)"
     )
     fundamentals.set_defaults(handler=cmd_fundamentals)
+
+    technicals = sub.add_parser(
+        "technicals",
+        help="compute trend/momentum/volatility indicators from stored OHLCV (stage 5)",
+    )
+    technicals.add_argument(
+        "--ohlcv-dir",
+        type=Path,
+        default=OHLCV_DIR,
+        help="directory of per-symbol OHLCV CSVs, e.g. data/gpw_ohlcv",
+    )
+    technicals.add_argument("--output", type=Path, required=True)
+    technicals.set_defaults(handler=cmd_technicals)
 
     return parser
 
@@ -237,6 +280,33 @@ def cmd_fetch_sec(args: argparse.Namespace) -> int:
     print()
     print(_breakdown(result.instruments))
     print(f"\nSnapshot: {args.output}\nMetadata: {args.metadata}\nCIK map: {args.cik_output}")
+    return 0
+
+
+def cmd_fetch_gpw(args: argparse.Namespace) -> int:
+    stocks = parse_stocks(fetch_stocks_html())
+    etfs = parse_etfs(fetch_etf_html())
+    records = [stock_to_symbol_record(s) for s in stocks] + [etf_to_symbol_record(e) for e in etfs]
+    result = filter_instruments(records)
+
+    write_snapshot(result.instruments, args.output)
+    write_metadata(
+        args.metadata,
+        source=(
+            f"GPW gpw.pl/spolki + gpw.pl/etfy "
+            f"(PLN-denominated Glowny Rynek, no XTB account; "
+            f"{len(stocks)} stocks, {len(etfs)} ETFs)"
+        ),
+        total=result.total,
+        kept=result.kept,
+        rejections=result.rejections,
+    )
+    write_isin_map(build_isin_map(stocks, etfs), args.isin_output)
+
+    print(result.summary())
+    print()
+    print(_breakdown(result.instruments))
+    print(f"\nSnapshot: {args.output}\nMetadata: {args.metadata}\nISIN map: {args.isin_output}")
     return 0
 
 
@@ -387,6 +457,33 @@ def cmd_fundamentals(args: argparse.Namespace) -> int:
     if failed:
         print("failed: " + ", ".join(failed))
     print(f"\nFundamentals: {args.output}")
+    return 0
+
+
+#: Below this many bars, none of the indicators have enough history to mean
+#: anything (RSI/MACD/Bollinger all need at least ~20-26); longer indicators
+#: like SMA 200 simply stay None for instruments with a shorter history.
+MIN_BARS_FOR_TECHNICALS = 20
+
+
+def cmd_technicals(args: argparse.Namespace) -> int:
+    csv_files = sorted(args.ohlcv_dir.glob("*.csv"))
+    rows = []
+    skipped = 0
+
+    for path in csv_files:
+        bars = read_ohlcv(path)
+        if len(bars) < MIN_BARS_FOR_TECHNICALS:
+            skipped += 1
+            continue
+        rows.append(compute_technicals(path.stem, bars))
+
+    write_technicals(rows, args.output)
+
+    print(
+        f"{len(rows)}/{len(csv_files)} instruments computed, {skipped} skipped (too little history)"
+    )
+    print(f"\nTechnicals: {args.output}")
     return 0
 
 
