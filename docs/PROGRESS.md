@@ -226,16 +226,24 @@ line with Apple's actual reported FY2025 results.
   `company_tickers.json`.
 * Two changes made in response: `sec_edgar.USER_AGENT` now includes a concrete,
   checkable contact URL (the repo itself) instead of the vaguer "contact via GitHub
-  issues", and `fundamentals.MIN_REQUEST_INTERVAL_S` doubled to 2.0s. Whether either
-  actually matters (versus this simply needing the stated cooldown) isn't verified yet
-  — a background retry was scheduled after an ~11-minute wait; check further down this
-  log or the session transcript for the outcome, and treat SEC's fundamentals endpoint
-  as needing real patience for a bulk run, not a single unattended sitting.
+  issues", and `fundamentals.MIN_REQUEST_INTERVAL_S` doubled to 2.0s.
+* **Retried after the stated ~10-minute cooldown (waited 12) — still blocked.** A
+  single, isolated request to `data.sec.gov` (not even through the CLI — a bare `curl`,
+  one request) came back the same `403 "Undeclared Automated Tool"` after twelve
+  minutes of zero traffic from this session. SEC's own page describes the cooldown as
+  "once the rate of requests has dropped below the threshold for 10 minutes" — since
+  *this session* sent nothing in that window and the block held anyway, the block is
+  most plausibly scoped to the sandbox's **shared egress IP** rather than this
+  session's own request history: other tenants of the same infrastructure generating
+  traffic would keep the aggregate rate over threshold regardless of what this session
+  does. That's a genuine, durable constraint of running SEC EDGAR's XBRL endpoint from
+  this kind of shared cloud sandbox, not a bug in the throttle or the User-Agent —
+  stopped retrying rather than hammering SEC's infrastructure further to confirm it.
 
 **Next**
 
 * Backfill `us_stocks_fundamentals.csv` for the rest of the 50-symbol OHLCV subset (and
-  eventually the full 10,422-company universe) at a conservative pace, tolerating
-  occasional cooldowns rather than fighting them.
+  eventually the full 10,422-company universe) from a machine with its own, unshared
+  IP — a personal computer, not this kind of shared sandbox — at a conservative pace.
 * Stage 5: technicals (trend, momentum, volatility indicators) — can build directly on
   the OHLCV data already committed.
