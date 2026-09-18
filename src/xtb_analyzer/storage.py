@@ -15,6 +15,7 @@ from .gpw import IsinEntry
 from .identity import IdentityMapping
 from .market_data import Bar
 from .models import Instrument
+from .portfolio import PortfolioRow, Position
 from .scoring import Score
 from .sec_edgar import CikEntry
 from .technicals import Technicals
@@ -279,6 +280,65 @@ def _row_to_score(row: dict[str, str]) -> Score:
         fundamental_score=float(fundamental_score) if fundamental_score else None,
         composite_score=float(row["composite_score"]),
         verdict=row["verdict"],
+        rationale=row["rationale"],
+    )
+
+
+def write_positions(positions: Iterable[Position], path: Path) -> Path:
+    """Write the account's open positions (stage 7), straight from ``getTrades``."""
+    positions = list(positions)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=Position.csv_columns())
+        writer.writeheader()
+        for position in positions:
+            writer.writerow(position.as_dict())
+    return path
+
+
+def read_positions(path: Path) -> list[Position]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [
+            Position(
+                symbol=row["symbol"],
+                side=row["side"],
+                volume=float(row["volume"]),
+                open_price=float(row["open_price"]),
+            )
+            for row in csv.DictReader(handle)
+        ]
+
+
+def write_portfolio(rows: Iterable[PortfolioRow], path: Path) -> Path:
+    """Write the per-position condition report (stage 7)."""
+    rows = list(rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PortfolioRow.csv_columns())
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row.as_dict())
+    return path
+
+
+def read_portfolio(path: Path) -> list[PortfolioRow]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [_row_to_portfolio_row(row) for row in csv.DictReader(handle)]
+
+
+def _row_to_portfolio_row(row: dict[str, str]) -> PortfolioRow:
+    return PortfolioRow(
+        symbol=row["symbol"],
+        side=row["side"],
+        volume=float(row["volume"]),
+        open_price=float(row["open_price"]),
+        current_price=float(row["current_price"]),
+        market_value=float(row["market_value"]),
+        unrealized_pnl=float(row["unrealized_pnl"]),
+        unrealized_pnl_pct=float(row["unrealized_pnl_pct"]),
+        verdict=row["verdict"],
+        composite_score=float(row["composite_score"]),
+        action=row["action"],
         rationale=row["rationale"],
     )
 

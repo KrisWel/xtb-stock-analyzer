@@ -22,6 +22,7 @@ Reference: <http://developers.xstore.pro/documentation/>
 | `login` | `{userId, password, appName}` → `streamSessionId` |
 | `getAllSymbols` | full instrument list (several MB, ~10k+ records) |
 | `getServerTime` | connectivity check |
+| `getTrades` | `{openedOnly}` → open positions (stage 7) — **not verified live**, see below |
 | `logout` | clean session close |
 
 ## Fields of a symbol record that matter here
@@ -51,3 +52,23 @@ These drive the thresholds in `filters.py` and should be re-checked with
 
 If the answer to any of these turns out to be "no", loosen the corresponding rule in
 `FilterConfig` rather than hard-coding an exception.
+
+## `getTrades` (stage 7) — not verified live
+
+No session so far has had XTB credentials, so `xtb_client.py::get_trades` has never
+run against a real response. The shape below is taken from xAPI's published
+documentation, not confirmed against live data:
+
+| Field | Notes |
+|-------|-------|
+| `symbol` | same `TICKER.MARKET` shape as `getAllSymbols` |
+| `cmd` | numeric trade direction; `0` = BUY, `1` = SELL (`portfolio.py`'s `TRADE_CMD_*`) |
+| `volume` | position size, in the instrument's own units (shares for cash equities) |
+| `open_price` | average entry price |
+
+Before trusting this against a real account: confirm `cmd`'s numeric codes for a cash
+equity specifically (xAPI's docs list more trade-direction codes for derivatives that
+shouldn't apply to a long-only stock/ETF position), and confirm `open_price` is in the
+instrument's quote currency (matching what `market_data.py`'s OHLCV close is in) rather
+than the account's deposit currency — `portfolio.py::build_portfolio_row` assumes they
+match.

@@ -5,7 +5,15 @@ from xtb_analyzer.cli import main
 from xtb_analyzer.fundamentals import Fundamentals
 from xtb_analyzer.identity import IdentityMapping
 from xtb_analyzer.market_data import Bar
-from xtb_analyzer.storage import write_fundamentals, write_identity_map, write_technicals
+from xtb_analyzer.portfolio import Position
+from xtb_analyzer.scoring import Score
+from xtb_analyzer.storage import (
+    write_fundamentals,
+    write_identity_map,
+    write_positions,
+    write_scores,
+    write_technicals,
+)
 from xtb_analyzer.technicals import Technicals
 
 
@@ -396,3 +404,70 @@ def test_score_blends_fundamentals_when_identity_map_bridges_the_symbols(tmp_pat
     assert any(row.startswith("AAPL,") and ",BUY," in row for row in rows[1:])
     stdout = capsys.readouterr().out
     assert "1 instruments scored (1 with fundamentals blended in)" in stdout
+
+
+def test_portfolio_overlays_positions_with_scores_and_reports_pnl(tmp_path, capsys):
+    positions_csv = tmp_path / "positions.csv"
+    write_positions(
+        [
+            Position(symbol="CDR.PL", side="BUY", volume=10.0, open_price=80.0),
+            Position(symbol="UNKNOWN.PL", side="BUY", volume=1.0, open_price=10.0),
+        ],
+        positions_csv,
+    )
+
+    scores_csv = tmp_path / "scores.csv"
+    write_scores(
+        [
+            Score(
+                symbol="CDR.WA",
+                date="2026-09-18",
+                close=100.0,
+                technical_score=80.0,
+                fundamental_score=None,
+                composite_score=80.0,
+                verdict="BUY",
+                rationale="price above SMA200 (long-term uptrend)",
+            )
+        ],
+        scores_csv,
+    )
+
+    identity_map_csv = tmp_path / "identity_map.csv"
+    write_identity_map(
+        [
+            IdentityMapping(
+                symbol="CDR.PL",
+                ticker="CDR",
+                market="PL",
+                currency="PLN",
+                yahoo_symbol="CDR.WA",
+                figi=None,
+            )
+        ],
+        identity_map_csv,
+    )
+
+    out = tmp_path / "portfolio.csv"
+    exit_code = main(
+        [
+            "portfolio",
+            "--positions",
+            str(positions_csv),
+            "--scores",
+            str(scores_csv),
+            "--identity-map",
+            str(identity_map_csv),
+            "--output",
+            str(out),
+        ]
+    )
+
+    assert exit_code == 0
+    rows = out.read_text(encoding="utf-8").splitlines()
+    assert any(row.startswith("CDR.PL,BUY,") and ",BUY," in row for row in rows[1:])
+    assert not any(row.startswith("UNKNOWN.PL") for row in rows[1:])
+    stdout = capsys.readouterr().out
+    assert "1/2 positions matched to a score, 1 skipped" in stdout
+    assert "skipped (no score found): UNKNOWN.PL" in stdout
+    assert "total unrealized P&L: 200.00" in stdout

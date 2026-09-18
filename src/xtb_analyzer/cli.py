@@ -19,6 +19,8 @@ from .config import (
     GPW_ISIN_CSV,
     IDENTITY_MAP_CSV,
     OHLCV_DIR,
+    PORTFOLIO_CSV,
+    POSITIONS_CSV,
     RAW_DIR,
     SNAPSHOT_CSV,
     SNAPSHOT_META,
@@ -45,6 +47,7 @@ from .gpw import (
 from .identity import map_instruments
 from .market_data import YahooChartClient, YahooFinanceError, merge_bars, safe_filename
 from .openfigi import OpenFigiClient, OpenFigiError, build_jobs
+from .portfolio import build_portfolio_row, trade_to_position
 from .scoring import compute_score
 from .sec_edgar import SecEdgarError, build_cik_map, fetch_company_tickers, to_symbol_record
 from .storage import (
@@ -52,7 +55,9 @@ from .storage import (
     read_fundamentals,
     read_identity_map,
     read_ohlcv,
+    read_positions,
     read_raw,
+    read_scores,
     read_snapshot,
     read_technicals,
     write_cik_map,
@@ -61,6 +66,8 @@ from .storage import (
     write_isin_map,
     write_metadata,
     write_ohlcv,
+    write_portfolio,
+    write_positions,
     write_raw,
     write_scores,
     write_snapshot,
@@ -253,6 +260,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     score.add_argument("--output", type=Path, required=True)
     score.set_defaults(handler=cmd_score)
+
+    positions = sub.add_parser(
+        "positions",
+        help="fetch open positions from the real XTB account via getTrades (stage 7)",
+    )
+    positions.add_argument("--output", type=Path, default=POSITIONS_CSV)
+    positions.set_defaults(handler=cmd_positions)
+
+    portfolio = sub.add_parser(
+        "portfolio",
+        help="overlay open positions with the latest score for a per-position "
+        "condition report (stage 7)",
+    )
+    portfolio.add_argument("--positions", type=Path, default=POSITIONS_CSV)
+    portfolio.add_argument(
+        "--scores", type=Path, required=True, help="scores CSV, e.g. data/gpw_scores.csv"
+    )
+    portfolio.add_argument(
+        "--identity-map",
+        type=Path,
+        default=None,
+        help="identity map bridging positions' XTB symbol to scores' yahoo_symbol",
+    )
+    portfolio.add_argument("--output", type=Path, default=PORTFOLIO_CSV)
+    portfolio.set_defaults(handler=cmd_portfolio)
 
     return parser
 
@@ -542,6 +574,52 @@ def cmd_score(args: argparse.Namespace) -> int:
     print(f"{len(rows)} instruments scored ({with_fundamentals} with fundamentals blended in)")
     print("verdicts: " + ", ".join(f"{k}={v}" for k, v in sorted(by_verdict.items())))
     print(f"\nScores: {args.output}")
+    return 0
+
+
+def cmd_positions(args: argparse.Namespace) -> int:
+    credentials = load_credentials()
+    with XtbClient(credentials) as client:
+        trades = client.get_trades(opened_only=True)
+
+    positions = [trade_to_position(trade) for trade in trades]
+    write_positions(positions, args.output)
+
+    print(f"{len(positions)} open positions")
+    print(f"\nPositions: {args.output}")
+    return 0
+
+
+def cmd_portfolio(args: argparse.Namespace) -> int:
+    positions = read_positions(args.positions)
+    scores_by_symbol = {s.symbol: s for s in read_scores(args.scores)}
+
+    yahoo_by_symbol: dict[str, str] = {}
+    if args.identity_map:
+        yahoo_by_symbol = {
+            m.symbol: m.yahoo_symbol for m in read_identity_map(args.identity_map) if m.yahoo_symbol
+        }
+
+    rows = []
+    skipped: list[str] = []
+    for position in positions:
+        yahoo_symbol = yahoo_by_symbol.get(position.symbol, position.symbol)
+        score = scores_by_symbol.get(yahoo_symbol)
+        if score is None:
+            skipped.append(position.symbol)
+            continue
+        rows.append(build_portfolio_row(position, score))
+
+    write_portfolio(rows, args.output)
+
+    total_value = sum(row.market_value for row in rows)
+    total_pnl = sum(row.unrealized_pnl for row in rows)
+    print(f"{len(rows)}/{len(positions)} positions matched to a score, {len(skipped)} skipped")
+    if skipped:
+        print("skipped (no score found): " + ", ".join(skipped))
+    print(f"total market value:   {total_value:.2f}")
+    print(f"total unrealized P&L: {total_pnl:.2f}")
+    print(f"\nPortfolio: {args.output}")
     return 0
 
 

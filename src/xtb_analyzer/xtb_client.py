@@ -110,6 +110,23 @@ class XtbClient:
         data = self._request("getServerTime")
         return data if isinstance(data, dict) else {}
 
+    def get_trades(self, opened_only: bool = True) -> list[dict[str, Any]]:
+        """Return the account's open positions (stage 7, portfolio view).
+
+        Not verified live — no session so far has had XTB credentials (see
+        docs/xtb-api-notes.md); the shape (``symbol``, ``cmd``, ``volume``,
+        ``open_price``, ...) is taken from xAPI's published documentation
+        for ``getTrades``. Confirm field names against a real response
+        before trusting them blindly, same discipline as everywhere else.
+        """
+        data = self._request("getTrades", {"openedOnly": opened_only})
+        if not isinstance(data, list):
+            raise XtbApiError(
+                "getTrades", "MALFORMED", f"expected a list, got {type(data).__name__}"
+            )
+        log.info("getTrades returned %d records", len(data))
+        return data
+
     # -- plumbing ----------------------------------------------------------
     def _request(
         self, command: str, arguments: dict[str, Any] | None = None, *, redact: bool = False

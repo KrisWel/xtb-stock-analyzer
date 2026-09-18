@@ -35,6 +35,10 @@ xtb-analyzer score --technicals data/gpw_technicals.csv \
   --output data/gpw_scores.csv                                      # stage 6 verdicts
 ```
 
+Stage 7 (`xtb-analyzer positions` / `portfolio`) needs a real XTB login and has no
+GPW/SEC equivalent — skip it until credentials exist, same as `xtb-analyzer fetch`
+for the primary XTB universe.
+
 The GPW universe (~440 instruments) is small enough that a full `ohlcv` run
 completes in one sitting (a few minutes) — unlike the US/SEC universe
 (10k+ symbols), there's no need to scope it down to a subset. Re-run these
