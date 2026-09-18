@@ -1,16 +1,17 @@
 # xtb-stock-analyzer
 
 Building blocks for a personal tool that tracks every instrument available on an
-**XTB** account and — later — scores each ticker as **buy / sell / hold** based on
-company fundamentals, history and technical indicators.
+**XTB** account and scores each ticker as **buy / sell / hold** based on company
+fundamentals, history and technical indicators.
 
-> **Status: stage 5 of the roadmap.** The project downloads the full XTB instrument
+> **Status: stage 6 of the roadmap.** The project downloads the full XTB instrument
 > universe and reduces it to **cash equities and ETFs/ETNs only** (derivatives —
 > stock CFDs, index CFDs, FX, commodities, crypto — are deliberately excluded), maps
 > each surviving symbol onto a Yahoo Finance ticker and, optionally, a FIGI, pulls and
 > incrementally refreshes OHLCV history per instrument, fetches raw company
-> fundamentals where a free source has them, and computes trend/momentum/volatility
-> indicators from the stored OHLCV. No XTB account available? Two login-free
+> fundamentals where a free source has them, computes trend/momentum/volatility
+> indicators from the stored OHLCV, and combines those into a transparent buy / hold /
+> sell verdict with a plain-English rationale. No XTB account available? Two login-free
 > alternative universes cover the rest of the pipeline unchanged: `fetch-sec` (US-listed
 > stocks via SEC EDGAR) and `fetch-gpw` (PLN-denominated stocks + ETFs on the Warsaw
 > Stock Exchange) — see below. **Every session tries to refresh as much of the GPW
@@ -104,6 +105,13 @@ xtb-analyzer ohlcv --identity-map data/gpw_identity_map.csv --output-dir data/gp
 
 # stage 5: trend/momentum/volatility indicators from stored OHLCV (any universe)
 xtb-analyzer technicals --ohlcv-dir data/gpw_ohlcv --output data/gpw_technicals.csv
+
+# stage 6: combine technicals (+ fundamentals, when available) into a verdict
+xtb-analyzer score --technicals data/gpw_technicals.csv --output data/gpw_scores.csv
+xtb-analyzer score --technicals data/us_stocks_technicals.csv \
+  --fundamentals data/us_stocks_fundamentals.csv \
+  --identity-map data/us_stocks_identity_map.csv \
+  --output data/us_stocks_scores.csv
 ```
 
 Sample output:
@@ -257,6 +265,10 @@ xtb-analyzer fetch-gpw   # -> data/gpw_instruments.csv, data/gpw_isin.csv
   way as any other universe, if wanted alongside).
 * Both `gpw.pl` endpoints are undocumented HTML/AJAX internals, not a public API — same
   caution as `market_data.py`'s Yahoo endpoint and `openfigi.py`'s exchange-code table.
+  **Verified live and fixed once already** (2026-09-18): GPW marks a suspended/newly
+  listed ETN's status with plain text (`/Z`) appended straight into the ticker's `<b>`
+  tag, not its own markup — `parse_etfs` now strips it (`gpw.py::_clean_etf_ticker`)
+  instead of building a broken Yahoo symbol from it; see `docs/PROGRESS.md`.
 * Unlike the US/SEC universe (10k+ symbols, deliberately scoped down for `ohlcv`), the
   GPW universe (~440 instruments) is small enough that a **full** OHLCV backfill
   completes in one sitting — see `CLAUDE.md` for the standing instruction to do exactly
@@ -292,6 +304,48 @@ Instruments with fewer than 20 bars of history are skipped entirely (nothing her
 anything with less); an instrument with, say, 60 bars still gets SMA 20/50, RSI, MACD
 and Bollinger values — SMA 200 just stays `None` until there's enough history.
 
+## Scoring (stage 6)
+
+`xtb_analyzer/scoring.py` combines a `Technicals` row (and, when available, a matching
+`Fundamentals` row) into one auditable **BUY / HOLD / SELL** verdict with a
+plain-English rationale — a deliberately rule-based approach, not a black-box model, so
+every verdict can be explained by listing exactly which signals fired.
+
+```bash
+xtb-analyzer score --technicals data/gpw_technicals.csv --output data/gpw_scores.csv
+
+# blend in fundamentals where they exist (currently us_stocks only) via the identity
+# map that bridges fundamentals' XTB-style symbol to technicals' Yahoo ticker
+xtb-analyzer score --technicals data/us_stocks_technicals.csv \
+  --fundamentals data/us_stocks_fundamentals.csv \
+  --identity-map data/us_stocks_identity_map.csv \
+  --output data/us_stocks_scores.csv
+```
+
+Two independent sub-scores, each normalised onto the same `-100..100` scale so they're
+comparable regardless of how many of their inputs an instrument actually has data for:
+
+* **Technical score** — trend (price vs SMA 20/50/200), momentum (RSI, MACD) and
+  mean-reversion (Bollinger Bands). Works for every instrument with enough OHLCV
+  history, in any universe — this is the only score GPW instruments get today.
+* **Fundamental score** — profitability (net margin), growth (revenue YoY) and
+  balance-sheet risk (liabilities/equity). Only computed where a `Fundamentals` row
+  exists for that symbol; currently that's the `us_stocks` universe (and even there,
+  only 1 company so far — see `docs/PROGRESS.md`).
+
+The **composite score** blends the two — 40% fundamentals, 60% technicals — when a
+fundamentals row is available, and falls back to the technical score alone otherwise
+(`--fundamentals` and `--identity-map` are both optional). `verdict` is `BUY` at
+composite >= 40, `SELL` at <= -40, `HOLD` in between; `rationale` lists every signal
+that fired, e.g. `"price above SMA200 (long-term uptrend); RSI oversold (18.2 < 30);
+strong net margin (26.9% > 15%)"`.
+
+**Why GPW instruments are technicals-only for now**: GPW-listed companies report to
+the KNF/ESPI system, not SEC's XBRL — no free, structured fundamentals source for them
+has been found yet (an open question tracked in `docs/PROGRESS.md`). `score` still runs
+against the full GPW universe; it's just working from a smaller, purely technical set
+of signals until that gap is closed.
+
 ## Outputs
 
 | Path | Committed | Contents |
@@ -306,11 +360,14 @@ and Bollinger values — SMA 200 just stays `None` until there's enough history.
 | `data/us_stocks_identity_map.csv` | yes | identity map for the `us_stocks` universe |
 | `data/us_stocks_ohlcv/<ticker>.csv` | yes | OHLCV history for the 50 largest `us_stocks` companies (by SEC's own ordering) |
 | `data/us_stocks_fundamentals.csv` | yes | raw fundamentals per company, via SEC EDGAR XBRL (partial — see `docs/PROGRESS.md`) |
+| `data/us_stocks_technicals.csv` | yes | latest trend/momentum/volatility indicators for the `us_stocks` universe |
+| `data/us_stocks_scores.csv` | yes | buy/hold/sell verdicts for `us_stocks`, technicals + fundamentals blended where both exist |
 | `data/gpw_instruments.csv` + `.meta.json` | yes | `fetch-gpw`'s login-free universe (PLN stocks + ETFs on GPW) |
 | `data/gpw_isin.csv` | yes | symbol -> real ISIN sidecar, straight from GPW |
 | `data/gpw_identity_map.csv` | yes | identity map for the `gpw` universe (Yahoo ticker + FIGI) |
 | `data/gpw_ohlcv/<ticker>.csv` | yes | OHLCV history for the `gpw` universe — full coverage, not a subset |
 | `data/gpw_technicals.csv` | yes | latest trend/momentum/volatility indicators for the `gpw` universe |
+| `data/gpw_scores.csv` | yes | buy/hold/sell verdicts for `gpw`, technicals-only (no free GPW fundamentals source yet) |
 
 `data/instruments.csv` doubles as the **fallback**: `xtb-analyzer show` and any later
 analysis step can run from it with no XTB login at all. Commit it after each refresh
@@ -333,9 +390,10 @@ src/xtb_analyzer/
   fundamentals.py stage 4: raw company fundamentals via SEC EDGAR XBRL
   gpw.py         login-free alternative universe: PLN stocks + ETFs on GPW
   technicals.py  stage 5: trend/momentum/volatility indicators from stored OHLCV
-  storage.py     CSV snapshot, identity map, OHLCV, fundamentals, technicals I/O
+  scoring.py     stage 6: technicals (+ fundamentals) -> buy/hold/sell verdict + rationale
+  storage.py     CSV snapshot, identity map, OHLCV, fundamentals, technicals, scores I/O
   cli.py         fetch / fetch-sec / fetch-gpw / inspect / show / map / ohlcv /
-                 fundamentals / technicals
+                 fundamentals / technicals / score
 tests/           pytest suite driven by a fixture payload — runs without an XTB account
 docs/            API notes and progress log
 ```
@@ -343,7 +401,7 @@ docs/            API notes and progress log
 ## Development
 
 ```bash
-pytest            # 105 tests, no network or credentials required
+pytest            # 124 tests, no network or credentials required
 ruff check .
 ruff format .
 ```
@@ -357,7 +415,7 @@ CI runs the same three commands on every push and pull request.
 - [x] **3. Market data** — OHLCV history per instrument, incremental refresh, local store
 - [x] **4. Fundamentals** — valuation, profitability, growth, balance-sheet metrics
 - [x] **5. Technicals** — trend, momentum, volatility indicators
-- [ ] **6. Scoring** — combine into a transparent buy / sell / hold verdict with rationale
+- [x] **6. Scoring** — combine into a transparent buy / sell / hold verdict with rationale
 - [ ] **7. Portfolio view** — overlay actual XTB holdings and report per-position condition
 
 See `docs/PROGRESS.md` for the running log.

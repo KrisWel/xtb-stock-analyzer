@@ -31,6 +31,8 @@ xtb-analyzer ohlcv --identity-map data/gpw_identity_map.csv \
   --output-dir data/gpw_ohlcv                                       # full history, all symbols
 xtb-analyzer technicals --ohlcv-dir data/gpw_ohlcv \
   --output data/gpw_technicals.csv                                  # stage 5 indicators
+xtb-analyzer score --technicals data/gpw_technicals.csv \
+  --output data/gpw_scores.csv                                      # stage 6 verdicts
 ```
 
 The GPW universe (~440 instruments) is small enough that a full `ohlcv` run

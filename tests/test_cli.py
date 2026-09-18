@@ -2,7 +2,11 @@ import json
 from pathlib import Path
 
 from xtb_analyzer.cli import main
+from xtb_analyzer.fundamentals import Fundamentals
+from xtb_analyzer.identity import IdentityMapping
 from xtb_analyzer.market_data import Bar
+from xtb_analyzer.storage import write_fundamentals, write_identity_map, write_technicals
+from xtb_analyzer.technicals import Technicals
 
 
 def test_fetch_from_raw_writes_snapshot(tmp_path, sample_records_path, capsys):
@@ -283,3 +287,112 @@ def test_technicals_computes_for_instruments_with_enough_history(tmp_path, capsy
     assert not any(row.startswith("TOO_SHORT,") for row in rows[1:])
     stdout = capsys.readouterr().out
     assert "1/2 instruments computed, 1 skipped" in stdout
+
+
+def _technicals_row(symbol: str, **overrides) -> Technicals:
+    base = dict(
+        symbol=symbol,
+        date="2026-09-17",
+        close=110.0,
+        sma_20=100.0,
+        sma_50=100.0,
+        sma_200=90.0,
+        ema_12=None,
+        ema_26=None,
+        rsi_14=20.0,
+        macd=None,
+        macd_signal=None,
+        macd_histogram=None,
+        bb_upper=None,
+        bb_middle=None,
+        bb_lower=None,
+        atr_14=None,
+    )
+    base.update(overrides)
+    return Technicals(**base)
+
+
+def test_score_computes_verdicts_from_technicals_only(tmp_path, capsys):
+    technicals_csv = tmp_path / "technicals.csv"
+    write_technicals(
+        [
+            _technicals_row("BULLISH.PL"),
+            _technicals_row(
+                "BEARISH.PL", close=80.0, sma_20=90.0, sma_50=90.0, sma_200=100.0, rsi_14=80.0
+            ),
+        ],
+        technicals_csv,
+    )
+    out = tmp_path / "scores.csv"
+
+    exit_code = main(["score", "--technicals", str(technicals_csv), "--output", str(out)])
+
+    assert exit_code == 0
+    rows = out.read_text(encoding="utf-8").splitlines()
+    assert any(row.startswith("BULLISH.PL,") and ",BUY," in row for row in rows[1:])
+    assert any(row.startswith("BEARISH.PL,") and ",SELL," in row for row in rows[1:])
+    stdout = capsys.readouterr().out
+    assert "2 instruments scored (0 with fundamentals blended in)" in stdout
+
+
+def test_score_blends_fundamentals_when_identity_map_bridges_the_symbols(tmp_path, capsys):
+    technicals_csv = tmp_path / "technicals.csv"
+    write_technicals([_technicals_row("AAPL")], technicals_csv)
+
+    fundamentals_csv = tmp_path / "fundamentals.csv"
+    write_fundamentals(
+        [
+            Fundamentals(
+                symbol="AAPL.US",
+                cik=320193,
+                fiscal_year=2025,
+                fiscal_year_end="2025-09-27",
+                revenue=1000.0,
+                revenue_prior_year=800.0,
+                net_income=200.0,
+                net_income_prior_year=None,
+                gross_profit=None,
+                total_assets=None,
+                total_liabilities=400.0,
+                stockholders_equity=500.0,
+                eps_diluted=None,
+            )
+        ],
+        fundamentals_csv,
+    )
+
+    identity_map_csv = tmp_path / "identity_map.csv"
+    write_identity_map(
+        [
+            IdentityMapping(
+                symbol="AAPL.US",
+                ticker="AAPL",
+                market="US",
+                currency="USD",
+                yahoo_symbol="AAPL",
+                figi=None,
+            )
+        ],
+        identity_map_csv,
+    )
+
+    out = tmp_path / "scores.csv"
+    exit_code = main(
+        [
+            "score",
+            "--technicals",
+            str(technicals_csv),
+            "--fundamentals",
+            str(fundamentals_csv),
+            "--identity-map",
+            str(identity_map_csv),
+            "--output",
+            str(out),
+        ]
+    )
+
+    assert exit_code == 0
+    rows = out.read_text(encoding="utf-8").splitlines()
+    assert any(row.startswith("AAPL,") and ",BUY," in row for row in rows[1:])
+    stdout = capsys.readouterr().out
+    assert "1 instruments scored (1 with fundamentals blended in)" in stdout

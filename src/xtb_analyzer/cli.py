@@ -45,13 +45,16 @@ from .gpw import (
 from .identity import map_instruments
 from .market_data import YahooChartClient, YahooFinanceError, merge_bars, safe_filename
 from .openfigi import OpenFigiClient, OpenFigiError, build_jobs
+from .scoring import compute_score
 from .sec_edgar import SecEdgarError, build_cik_map, fetch_company_tickers, to_symbol_record
 from .storage import (
     read_cik_map,
+    read_fundamentals,
     read_identity_map,
     read_ohlcv,
     read_raw,
     read_snapshot,
+    read_technicals,
     write_cik_map,
     write_fundamentals,
     write_identity_map,
@@ -59,6 +62,7 @@ from .storage import (
     write_metadata,
     write_ohlcv,
     write_raw,
+    write_scores,
     write_snapshot,
     write_technicals,
 )
@@ -222,6 +226,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     technicals.add_argument("--output", type=Path, required=True)
     technicals.set_defaults(handler=cmd_technicals)
+
+    score = sub.add_parser(
+        "score",
+        help="combine technicals (+ fundamentals, when available) into a buy/hold/sell "
+        "verdict with rationale (stage 6)",
+    )
+    score.add_argument(
+        "--technicals",
+        type=Path,
+        required=True,
+        help="technicals CSV, e.g. data/gpw_technicals.csv",
+    )
+    score.add_argument(
+        "--fundamentals",
+        type=Path,
+        default=None,
+        help="optional fundamentals CSV to blend in, e.g. data/us_stocks_fundamentals.csv "
+        "(requires --identity-map)",
+    )
+    score.add_argument(
+        "--identity-map",
+        type=Path,
+        default=None,
+        help="identity map bridging fundamentals' symbol to technicals' yahoo_symbol",
+    )
+    score.add_argument("--output", type=Path, required=True)
+    score.set_defaults(handler=cmd_score)
 
     return parser
 
@@ -484,6 +515,33 @@ def cmd_technicals(args: argparse.Namespace) -> int:
         f"{len(rows)}/{len(csv_files)} instruments computed, {skipped} skipped (too little history)"
     )
     print(f"\nTechnicals: {args.output}")
+    return 0
+
+
+def cmd_score(args: argparse.Namespace) -> int:
+    technicals = read_technicals(args.technicals)
+
+    fundamentals_by_yahoo: dict[str, Any] = {}
+    if args.fundamentals:
+        yahoo_by_symbol = {}
+        if args.identity_map:
+            yahoo_by_symbol = {
+                m.symbol: m.yahoo_symbol
+                for m in read_identity_map(args.identity_map)
+                if m.yahoo_symbol
+            }
+        for entry in read_fundamentals(args.fundamentals):
+            yahoo_symbol = yahoo_by_symbol.get(entry.symbol, entry.symbol)
+            fundamentals_by_yahoo[yahoo_symbol] = entry
+
+    rows = [compute_score(t, fundamentals_by_yahoo.get(t.symbol)) for t in technicals]
+    write_scores(rows, args.output)
+
+    with_fundamentals = sum(1 for r in rows if r.fundamental_score is not None)
+    by_verdict = Counter(r.verdict for r in rows)
+    print(f"{len(rows)} instruments scored ({with_fundamentals} with fundamentals blended in)")
+    print("verdicts: " + ", ".join(f"{k}={v}" for k, v in sorted(by_verdict.items())))
+    print(f"\nScores: {args.output}")
     return 0
 
 

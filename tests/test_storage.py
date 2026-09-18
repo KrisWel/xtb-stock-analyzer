@@ -6,6 +6,7 @@ from xtb_analyzer.fundamentals import Fundamentals
 from xtb_analyzer.gpw import IsinEntry
 from xtb_analyzer.identity import map_instruments
 from xtb_analyzer.market_data import Bar
+from xtb_analyzer.scoring import Score
 from xtb_analyzer.sec_edgar import CikEntry
 from xtb_analyzer.storage import (
     read_cik_map,
@@ -14,6 +15,7 @@ from xtb_analyzer.storage import (
     read_isin_map,
     read_ohlcv,
     read_raw,
+    read_scores,
     read_snapshot,
     read_technicals,
     write_cik_map,
@@ -23,6 +25,7 @@ from xtb_analyzer.storage import (
     write_metadata,
     write_ohlcv,
     write_raw,
+    write_scores,
     write_snapshot,
     write_technicals,
 )
@@ -182,3 +185,31 @@ def test_technicals_round_trip_preserves_values_and_none(tmp_path):
     path = write_technicals(original, tmp_path / "technicals.csv")
 
     assert read_technicals(path) == original
+
+
+def test_scores_round_trip_preserves_values_and_none_fundamental_score(tmp_path):
+    original = [
+        Score(
+            symbol="AAPL.US",
+            date="2026-09-16",
+            close=333.08,
+            technical_score=80.0,
+            fundamental_score=100.0,
+            composite_score=88.0,
+            verdict="BUY",
+            rationale="price above SMA200 (long-term uptrend); strong net margin (20.0% > 15%)",
+        ),
+        Score(
+            symbol="XYZ.PL",
+            date="2026-09-16",
+            close=12.5,
+            technical_score=-100.0,
+            fundamental_score=None,
+            composite_score=-100.0,
+            verdict="SELL",
+            rationale="price below SMA200 (long-term downtrend)",
+        ),
+    ]
+    path = write_scores(original, tmp_path / "scores.csv")
+
+    assert read_scores(path) == original
