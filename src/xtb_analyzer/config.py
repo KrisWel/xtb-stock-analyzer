@@ -48,6 +48,12 @@ GPW_SCORES_CSV = DATA_DIR / "gpw_scores.csv"
 US_STOCKS_SCORES_CSV = DATA_DIR / "us_stocks_scores.csv"
 SCORES_CSV = DATA_DIR / "scores.csv"
 
+#: Stage 7 — real XTB open positions and the portfolio view built from them.
+#: Both empty until a session has real XTB credentials, same as
+#: SNAPSHOT_CSV/IDENTITY_MAP_CSV above.
+POSITIONS_CSV = DATA_DIR / "positions.csv"
+PORTFOLIO_CSV = DATA_DIR / "portfolio.csv"
+
 WS_URLS = {
     "demo": "wss://ws.xtb.com/demo",
     "real": "wss://ws.xtb.com/real",

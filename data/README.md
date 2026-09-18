@@ -19,15 +19,20 @@
 | `gpw_ohlcv/<ticker>.csv` | yes | OHLCV history for the `gpw` universe — full coverage (438/442 symbols) |
 | `gpw_technicals.csv` | yes | `xtb-analyzer technicals` — latest trend/momentum/volatility indicators, `gpw` universe |
 | `gpw_scores.csv` | yes | `xtb-analyzer score` — buy/hold/sell verdicts for `gpw`, technicals-only (no free GPW fundamentals source yet) |
+| `positions.csv` | not yet (empty) | `xtb-analyzer positions` — real open positions via `getTrades`, needs XTB credentials |
+| `portfolio.csv` | not yet (empty) | `xtb-analyzer portfolio` — per-position condition report, needs `positions.csv` + a scores CSV |
 | `raw/all_symbols.json` | **no** (git-ignored) | `xtb-analyzer fetch` — untouched API payload, several MB |
 
-`instruments.csv` and `identity_map.csv` are still empty — every session so far has
-lacked XTB credentials. `us_stocks*` and `gpw*` are real, live data fetched via the
-login-free paths (see the README's "No XTB account?" and "Another login-free universe"
-sections) — **every session tries to keep the `gpw*` files fresh, see `CLAUDE.md`**.
+`instruments.csv`, `identity_map.csv`, `positions.csv` and `portfolio.csv` are still
+empty/absent — every session so far has lacked XTB credentials. `us_stocks*` and
+`gpw*` are real, live data fetched via the login-free paths (see the README's "No XTB
+account?" and "Another login-free universe" sections) — **every session tries to keep
+the `gpw*` files fresh, see `CLAUDE.md`**.
 Has an XTB demo account become available? Run `xtb-analyzer fetch` and commit the
 refreshed `instruments.csv` / `instruments.meta.json` so the repository carries the real
 XTB universe too. Run `xtb-analyzer map` afterwards (and commit `identity_map.csv`) to
 refresh the external-ticker mapping the same way. Then `xtb-analyzer ohlcv` to
 fetch/refresh the bar history in `ohlcv/` — safe to re-run often, since it only pulls
-bars newer than what's already on disk per symbol.
+bars newer than what's already on disk per symbol. Once positions exist, run
+`xtb-analyzer positions` and `xtb-analyzer portfolio` (stage 7) to get a real
+per-position condition report, and commit `positions.csv` / `portfolio.csv` too.

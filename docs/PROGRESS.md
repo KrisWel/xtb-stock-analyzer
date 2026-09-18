@@ -387,3 +387,67 @@ which stage 6 needed to demonstrate the fundamentals-blended path end to end.
   `us_stocks_fundamentals.csv` still only covers 1 of 10,422 companies — SEC's stricter
   bot-detection block (see the 2026-09-16 entry) makes that a slow, patience-limited
   process from a shared sandbox IP, not a fast one.
+
+## 2026-09-18 — stage 7 (portfolio view), and Yahoo Finance rate-limited a GPW refresh
+
+**Done — stage 7: `portfolio.py`**
+
+* `Position` — one open position (symbol, side, volume, open price). `trade_to_position`
+  reshapes a raw `getTrades` record; new `XtbClient.get_trades(opened_only=True)`.
+  **Not verified live** — no session so far has had XTB credentials, so the field
+  shape (`cmd`, `volume`, `open_price`, ...) is taken straight from xAPI's published
+  docs, same caveat `instruments.csv`/`identity_map.csv` already carry. Documented the
+  open questions (numeric `cmd` codes for a cash position specifically, quote-currency
+  vs. deposit-currency for `open_price`) in `docs/xtb-api-notes.md` for whenever
+  credentials do show up.
+* `build_portfolio_row` overlays a `Position` with its matching stage-6 `Score` (which
+  already carries the latest close, verdict and rationale) into a `PortfolioRow`:
+  market value, unrealized P&L (correctly inverted for a SELL position — it profits
+  when price falls), and `describe_action` — a one-line plain-English comparison of
+  the position's side against the verdict (agrees / opposes / neutral).
+* New commands: `xtb-analyzer positions` (live, needs credentials, writes
+  `data/positions.csv`) and `xtb-analyzer portfolio --scores <csv> [--identity-map
+  <csv>] --output <csv>` (fully offline, unit-tested against fixtures). Positions are
+  keyed by the XTB symbol (`CDR.PL`), scores by the Yahoo ticker (`CDR.WA`) — bridged
+  via the identity map, the same pattern stage 6 already established for fundamentals.
+* 15 new tests (139 total): hand-computed P&L for BUY-in-profit, BUY-at-a-loss, and a
+  SELL position (confirming the inverted sign), a zero-open-price guard, and all six
+  side/verdict combinations for `describe_action`.
+* **No real output yet** — `data/positions.csv` needs a real XTB login, which no
+  session has had. `data/portfolio.csv` is the same story, one level further down the
+  pipeline. Both stay absent, exactly like `data/instruments.csv`/`identity_map.csv`,
+  until a session has credentials to run `xtb-analyzer positions` for real.
+
+**Roadmap note**: all 7 stages now have a working, tested building block. The two
+still-open gaps are both "needs an input this sandbox has never had", not missing
+code: stage 4/7 need real XTB credentials or a broader `us_stocks_fundamentals.csv`
+(SEC rate-limiting-permitting), and stage 6 needs a free GPW fundamentals source that
+may not exist (see the 2026-09-17 entry).
+
+**Observed live — Yahoo Finance rate-limited today's GPW `ohlcv` refresh**
+
+Re-running the standing `fetch-gpw` → `map --figi` → `ohlcv` pipeline (this session
+ran it three times total: once before the stage-6 PR, once after fixing the GPW
+ticker-parsing bug, once for stage 7) hit Yahoo's chart endpoint hard enough that the
+third run got **98 `HTTP 429`s** out of 442 requests — previous sessions on the same
+day had seen zero. `market_data.py`'s existing per-request throttle was unchanged;
+this reads as the shared sandbox egress IP's request budget for the day, not a
+per-session behavior — the same class of issue already documented for SEC EDGAR's
+stricter block. Per `CLAUDE.md`'s "be a good citizen" instruction, did **not**
+retry-loop against the 429s: `ohlcv` is incremental, so the 98 affected symbols simply
+keep yesterday's most recent bar instead of today's and will pick up the missing day
+next time the pipeline runs with a fresh rate-limit window. `technicals`/`score` still
+ran cleanly against the resulting (slightly stale for 98 symbols) OHLCV data —
+426/439 instruments scored, unchanged from before this run.
+
+**Next**
+
+* Re-run the full `gpw` pipeline (through `score`) again next session — the 98
+  rate-limited symbols should catch up once Yahoo's window resets.
+* If XTB credentials ever become available: run `fetch` → `map` → `ohlcv` →
+  `positions` → `portfolio` for the real universe and commit the first real output for
+  every still-empty file (`instruments.csv`, `identity_map.csv`, `positions.csv`,
+  `portfolio.csv`), then verify `getTrades`'s field shape against the real response
+  and update `docs/xtb-api-notes.md`'s "not verified live" caveat.
+* The GPW-fundamentals and SEC-rate-limit open questions from the last two entries are
+  both still open.

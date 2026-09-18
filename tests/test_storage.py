@@ -6,6 +6,7 @@ from xtb_analyzer.fundamentals import Fundamentals
 from xtb_analyzer.gpw import IsinEntry
 from xtb_analyzer.identity import map_instruments
 from xtb_analyzer.market_data import Bar
+from xtb_analyzer.portfolio import PortfolioRow, Position
 from xtb_analyzer.scoring import Score
 from xtb_analyzer.sec_edgar import CikEntry
 from xtb_analyzer.storage import (
@@ -14,6 +15,8 @@ from xtb_analyzer.storage import (
     read_identity_map,
     read_isin_map,
     read_ohlcv,
+    read_portfolio,
+    read_positions,
     read_raw,
     read_scores,
     read_snapshot,
@@ -24,6 +27,8 @@ from xtb_analyzer.storage import (
     write_isin_map,
     write_metadata,
     write_ohlcv,
+    write_portfolio,
+    write_positions,
     write_raw,
     write_scores,
     write_snapshot,
@@ -213,3 +218,35 @@ def test_scores_round_trip_preserves_values_and_none_fundamental_score(tmp_path)
     path = write_scores(original, tmp_path / "scores.csv")
 
     assert read_scores(path) == original
+
+
+def test_positions_round_trip_preserves_values(tmp_path):
+    original = [
+        Position(symbol="CDR.PL", side="BUY", volume=10.0, open_price=80.0),
+        Position(symbol="ETH.US", side="SELL", volume=2.5, open_price=1234.56),
+    ]
+    path = write_positions(original, tmp_path / "positions.csv")
+
+    assert read_positions(path) == original
+
+
+def test_portfolio_round_trip_preserves_values(tmp_path):
+    original = [
+        PortfolioRow(
+            symbol="CDR.PL",
+            side="BUY",
+            volume=10.0,
+            open_price=80.0,
+            current_price=100.0,
+            market_value=1000.0,
+            unrealized_pnl=200.0,
+            unrealized_pnl_pct=0.25,
+            verdict="BUY",
+            composite_score=50.0,
+            action="signal supports the open BUY position (BUY)",
+            rationale="price above SMA200 (long-term uptrend)",
+        )
+    ]
+    path = write_portfolio(original, tmp_path / "portfolio.csv")
+
+    assert read_portfolio(path) == original

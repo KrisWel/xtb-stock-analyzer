@@ -4,18 +4,21 @@ Building blocks for a personal tool that tracks every instrument available on an
 **XTB** account and scores each ticker as **buy / sell / hold** based on company
 fundamentals, history and technical indicators.
 
-> **Status: stage 6 of the roadmap.** The project downloads the full XTB instrument
-> universe and reduces it to **cash equities and ETFs/ETNs only** (derivatives —
-> stock CFDs, index CFDs, FX, commodities, crypto — are deliberately excluded), maps
-> each surviving symbol onto a Yahoo Finance ticker and, optionally, a FIGI, pulls and
-> incrementally refreshes OHLCV history per instrument, fetches raw company
-> fundamentals where a free source has them, computes trend/momentum/volatility
-> indicators from the stored OHLCV, and combines those into a transparent buy / hold /
-> sell verdict with a plain-English rationale. No XTB account available? Two login-free
-> alternative universes cover the rest of the pipeline unchanged: `fetch-sec` (US-listed
-> stocks via SEC EDGAR) and `fetch-gpw` (PLN-denominated stocks + ETFs on the Warsaw
-> Stock Exchange) — see below. **Every session tries to refresh as much of the GPW
-> universe as possible — see `CLAUDE.md`.**
+> **Status: all 7 roadmap stages have building blocks in place.** The project
+> downloads the full XTB instrument universe and reduces it to **cash equities and
+> ETFs/ETNs only** (derivatives — stock CFDs, index CFDs, FX, commodities, crypto —
+> are deliberately excluded), maps each surviving symbol onto a Yahoo Finance ticker
+> and, optionally, a FIGI, pulls and incrementally refreshes OHLCV history per
+> instrument, fetches raw company fundamentals where a free source has them, computes
+> trend/momentum/volatility indicators from the stored OHLCV, combines those into a
+> transparent buy / hold / sell verdict with a plain-English rationale, and — stage 7 —
+> overlays real open positions against that verdict for a per-position condition
+> report. **Stage 7 has never run against real data**: no session so far has had XTB
+> credentials, the one thing it needs (same as `data/instruments.csv` itself). No XTB
+> account available at all? Two login-free alternative universes cover stages 1-6
+> unchanged: `fetch-sec` (US-listed stocks via SEC EDGAR) and `fetch-gpw`
+> (PLN-denominated stocks + ETFs on the Warsaw Stock Exchange) — see below. **Every
+> session tries to refresh as much of the GPW universe as possible — see `CLAUDE.md`.**
 
 ---
 
@@ -346,6 +349,35 @@ has been found yet (an open question tracked in `docs/PROGRESS.md`). `score` sti
 against the full GPW universe; it's just working from a smaller, purely technical set
 of signals until that gap is closed.
 
+## Portfolio view (stage 7, needs real XTB credentials)
+
+`xtb_analyzer/portfolio.py` overlays the account's actual open positions against the
+matching `score` row for a per-position condition report — market value, unrealized
+P&L, and a plain-English `action` comparing the position's side against the latest
+verdict (e.g. `"signal opposes the open BUY position (SELL) — review the position"`).
+
+```bash
+xtb-analyzer positions                                 # -> data/positions.csv, via getTrades
+xtb-analyzer portfolio --scores data/gpw_scores.csv \
+  --identity-map data/gpw_identity_map.csv             # -> data/portfolio.csv
+```
+
+* `positions` needs a real XTB login (a demo account's positions are enough) — the one
+  thing no session so far has had, same limitation `data/instruments.csv` already
+  carries. `getTrades`'s exact response shape is therefore **not verified live**; it's
+  taken from xAPI's published documentation (see `xtb_client.py::get_trades`) and
+  should be checked against a real response the same way every other assumption in
+  this project has been.
+* `portfolio` itself is fully offline and unit-tested against fixtures — it only needs
+  a positions CSV (any format `positions` or a hand-written one produces) and a scores
+  CSV from stage 6. Positions (keyed by the XTB symbol, e.g. `CDR.PL`) and scores
+  (keyed by the Yahoo ticker, e.g. `CDR.WA`) live in different symbol namespaces, the
+  same mismatch stage 6 already bridges — `--identity-map` does the same job here.
+* A **SELL** position's P&L is inverted relative to a **BUY** one (it profits when
+  price falls) — `build_portfolio_row` accounts for that; cash equities at XTB are
+  long-only in practice, so every real position here should come back `BUY`, but the
+  math handles both since `getTrades` reports the side explicitly.
+
 ## Outputs
 
 | Path | Committed | Contents |
@@ -368,19 +400,23 @@ of signals until that gap is closed.
 | `data/gpw_ohlcv/<ticker>.csv` | yes | OHLCV history for the `gpw` universe — full coverage, not a subset |
 | `data/gpw_technicals.csv` | yes | latest trend/momentum/volatility indicators for the `gpw` universe |
 | `data/gpw_scores.csv` | yes | buy/hold/sell verdicts for `gpw`, technicals-only (no free GPW fundamentals source yet) |
+| `data/positions.csv` | not yet (empty) | `xtb-analyzer positions` — real open positions via `getTrades`, needs XTB credentials |
+| `data/portfolio.csv` | not yet (empty) | `xtb-analyzer portfolio` — per-position condition report, needs `positions.csv` |
 
 `data/instruments.csv` doubles as the **fallback**: `xtb-analyzer show` and any later
 analysis step can run from it with no XTB login at all. Commit it after each refresh
-so the repo always carries a working universe. `data/instruments.csv` and
-`data/identity_map.csv` are still empty — no XTB credentials have been available in any
-session so far; `data/us_stocks*` is real, live-fetched data from the login-free path.
+so the repo always carries a working universe. `data/instruments.csv`,
+`data/identity_map.csv`, `data/positions.csv` and `data/portfolio.csv` are still
+empty/absent — no XTB credentials have been available in any session so far;
+`data/us_stocks*` and `data/gpw*` are real, live-fetched data from the login-free
+paths.
 
 ## Project layout
 
 ```
 src/xtb_analyzer/
   config.py      credentials + paths, loaded from .env
-  xtb_client.py  minimal xAPI WebSocket client (login / getAllSymbols / logout)
+  xtb_client.py  minimal xAPI WebSocket client (login / getAllSymbols / getTrades / logout)
   models.py      Instrument dataclass, symbol parsing (ticker + market)
   filters.py     cash-equity/ETF rules with per-rule rejection reasons
   identity.py    stage 2: offline symbol -> Yahoo Finance ticker mapping
@@ -391,9 +427,11 @@ src/xtb_analyzer/
   gpw.py         login-free alternative universe: PLN stocks + ETFs on GPW
   technicals.py  stage 5: trend/momentum/volatility indicators from stored OHLCV
   scoring.py     stage 6: technicals (+ fundamentals) -> buy/hold/sell verdict + rationale
-  storage.py     CSV snapshot, identity map, OHLCV, fundamentals, technicals, scores I/O
+  portfolio.py   stage 7: open positions (getTrades) + score -> per-position condition
+  storage.py     CSV snapshot, identity map, OHLCV, fundamentals, technicals, scores,
+                 positions, portfolio I/O
   cli.py         fetch / fetch-sec / fetch-gpw / inspect / show / map / ohlcv /
-                 fundamentals / technicals / score
+                 fundamentals / technicals / score / positions / portfolio
 tests/           pytest suite driven by a fixture payload — runs without an XTB account
 docs/            API notes and progress log
 ```
@@ -401,7 +439,7 @@ docs/            API notes and progress log
 ## Development
 
 ```bash
-pytest            # 124 tests, no network or credentials required
+pytest            # 139 tests, no network or credentials required
 ruff check .
 ruff format .
 ```
@@ -416,7 +454,9 @@ CI runs the same three commands on every push and pull request.
 - [x] **4. Fundamentals** — valuation, profitability, growth, balance-sheet metrics
 - [x] **5. Technicals** — trend, momentum, volatility indicators
 - [x] **6. Scoring** — combine into a transparent buy / sell / hold verdict with rationale
-- [ ] **7. Portfolio view** — overlay actual XTB holdings and report per-position condition
+- [x] **7. Portfolio view** — overlay actual XTB holdings and report per-position condition
+      (built and unit-tested; never run against real data — no session has had XTB
+      credentials yet, see `docs/PROGRESS.md`)
 
 See `docs/PROGRESS.md` for the running log.
 
