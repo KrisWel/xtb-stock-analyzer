@@ -316,3 +316,74 @@ instruction in the new `CLAUDE.md` so it survives across sessions, not just this
   file differently (KNF/ESPI, no free structured XBRL-equivalent found yet). Stage 6
   can combine technicals + whatever fundamentals exist per universe, but a GPW
   fundamentals source is still an open question, not yet solved.
+
+## 2026-09-18 — stage 6 (scoring), a live GPW parsing bug fixed, and another full data refresh
+
+**Done — stage 6: `scoring.py`**
+
+* Rule-based, not a black-box model — the roadmap explicitly asks for "a transparent
+  buy / sell / hold verdict with rationale", so every verdict is just a signed sum of
+  named signals that can be printed back out, not a score nobody can audit.
+* Two independent sub-scores, each normalised onto `-100..100` by counting only the
+  signals an instrument actually has data for (an instrument without 200 bars of
+  history isn't penalised for a missing SMA 200 reading):
+  * `score_technicals` — trend (price vs SMA 20/50/200), momentum (RSI, MACD) and
+    mean-reversion (Bollinger Bands). Works for any instrument with enough OHLCV
+    history, so every universe gets at least this.
+  * `score_fundamentals` — profitability (net margin), growth (revenue YoY), leverage
+    (liabilities/equity). Only computed where a `Fundamentals` row exists.
+* `compute_score` blends the two 60/40 (technicals/fundamentals) when a fundamentals
+  row is available for that symbol, technicals-only otherwise. `verdict_from_score`:
+  `BUY` at composite >= 40, `SELL` at <= -40, `HOLD` in between.
+* New `xtb-analyzer score --technicals <csv> [--fundamentals <csv> --identity-map
+  <csv>] --output <csv>` command. Fundamentals and technicals live in different symbol
+  namespaces (fundamentals keyed by the XTB-style `AAPL.US` symbol, technicals keyed by
+  the Yahoo ticker used as the OHLCV filename), so `--identity-map` bridges the two —
+  the same identity map `ohlcv`/`map` already produce.
+* 18 new tests in `tests/test_scoring.py`, hand-derivable (every technical signal
+  agreeing gives exactly ±100 given specific inputs; two opposite-weight signals
+  cancelling out gives exactly 0; the 60/40 blend is checked against the literal
+  arithmetic), plus round-trip and CLI coverage.
+* **Real output, both universes**: `data/gpw_scores.csv` (426 instruments,
+  technicals-only — see the open fundamentals question below) and
+  `data/us_stocks_scores.csv` (50 instruments, 1 with fundamentals blended in, since
+  `us_stocks_fundamentals.csv` still only has AAPL — see the 2026-09-16 entry).
+  GPW verdicts: 55 BUY / 248 HOLD / 123 SELL.
+
+**Fixed — a live GPW parsing bug caught by this session's own data refresh**
+
+Re-running `fetch-gpw` per the standing instruction (before touching `scoring.py`)
+surfaced a real page-structure edge case `gpw_etf_sample.html`'s fixture never
+exercised: one ETN's ticker came back as `ETNVIRXRP  /Z` instead of `ETNVIRXRP`. GPW
+appends an instrument-status marker (`/Z`, most likely "zawieszony" — suspended) as
+plain text inside the same `<b>` tag as the ticker, separated only by two literal
+spaces, not its own markup — so `_ETF_ROW_RE`'s ticker capture group swallowed it
+whole. The raw ticker (with embedded spaces) broke the Yahoo symbol built from it
+(`f"{ticker}.PL"` → a filename/URL with a space and a slash in it), which is exactly
+why `ohlcv` logged a `404` for `ETNVIRXRP.PL` in the *previous* session too — it just
+looked like an ordinary delisting at the time, not a parsing bug. Fixed in
+`gpw.py::_clean_etf_ticker` (splits on the first run of 2+ spaces, keeps the leading
+token) with a regression test reproducing the exact live row. Re-running the full
+pipeline after the fix dropped GPW's `ohlcv` failures from 4 to 3 (`IDG`, `KDM`, `REG`
+remain genuine Yahoo `404`s — likely too new/thin to be indexed there).
+
+**Refreshed — the standing per-session data-maximization instruction (`CLAUDE.md`)**
+
+Full `fetch-gpw` → `map --figi` → `ohlcv` → `technicals` → `score` run against live
+GPW/Yahoo/OpenFIGI data: 442 instruments (402 stocks + 40 ETFs, unchanged), 403/442
+FIGIs, 439/442 OHLCV files (3 genuine Yahoo 404s), 426/439 with enough history for
+`technicals`. Also computed `us_stocks_technicals.csv` (50/50) for the first time,
+which stage 6 needed to demonstrate the fundamentals-blended path end to end.
+
+**Next**
+
+* Stage 7 — portfolio view: overlay actual XTB holdings against `score`'s verdicts once
+  real XTB credentials are available in a session (still none so far).
+* The GPW fundamentals gap from the 2026-09-17 entry is still open: GPW companies file
+  via KNF/ESPI, not SEC XBRL, so `gpw_scores.csv` stays technicals-only until a free,
+  structured source is found (or not — KNF/ESPI may only ever expose filings as PDFs).
+* Keep re-running the full `gpw` pipeline (now including `score`) every session per
+  `CLAUDE.md`; consider running `fetch-sec` + `fundamentals` again too, since
+  `us_stocks_fundamentals.csv` still only covers 1 of 10,422 companies — SEC's stricter
+  bot-detection block (see the 2026-09-16 entry) makes that a slow, patience-limited
+  process from a shared sandbox IP, not a fast one.

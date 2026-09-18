@@ -11,11 +11,14 @@
 | `us_stocks_identity_map.csv` | yes | identity map for the `us_stocks` universe |
 | `us_stocks_ohlcv/<ticker>.csv` | yes | OHLCV history for `us_stocks` (currently: the 50 largest companies) |
 | `us_stocks_fundamentals.csv` | yes | `xtb-analyzer fundamentals` — raw fundamentals per company, SEC EDGAR XBRL (currently: 1 company — see `docs/PROGRESS.md`) |
+| `us_stocks_technicals.csv` | yes | `xtb-analyzer technicals` — latest trend/momentum/volatility indicators, `us_stocks` universe |
+| `us_stocks_scores.csv` | yes | `xtb-analyzer score` — buy/hold/sell verdicts for `us_stocks`, technicals + fundamentals blended where both exist |
 | `gpw_instruments.csv` + `.meta.json` | yes | `xtb-analyzer fetch-gpw` — login-free alternative universe (PLN stocks + ETFs, GPW) |
 | `gpw_isin.csv` | yes | `xtb-analyzer fetch-gpw` — symbol -> real ISIN sidecar, straight from GPW |
 | `gpw_identity_map.csv` | yes | identity map for the `gpw` universe (Yahoo ticker + FIGI) |
 | `gpw_ohlcv/<ticker>.csv` | yes | OHLCV history for the `gpw` universe — full coverage (438/442 symbols) |
 | `gpw_technicals.csv` | yes | `xtb-analyzer technicals` — latest trend/momentum/volatility indicators, `gpw` universe |
+| `gpw_scores.csv` | yes | `xtb-analyzer score` — buy/hold/sell verdicts for `gpw`, technicals-only (no free GPW fundamentals source yet) |
 | `raw/all_symbols.json` | **no** (git-ignored) | `xtb-analyzer fetch` — untouched API payload, several MB |
 
 `instruments.csv` and `identity_map.csv` are still empty — every session so far has

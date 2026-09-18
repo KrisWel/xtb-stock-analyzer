@@ -104,13 +104,27 @@ def parse_stocks(html: str) -> list[GpwStock]:
 def parse_etfs(html: str) -> list[GpwEtf]:
     """Parse the ``/etfy`` AJAX fragment into :class:`GpwEtf` rows."""
     etfs = [
-        GpwEtf(isin=isin, ticker=ticker.strip(), currency=currency)
+        GpwEtf(isin=isin, ticker=_clean_etf_ticker(ticker), currency=currency)
         for isin, ticker, isin_repeat, currency in _ETF_ROW_RE.findall(html)
         if isin == isin_repeat
     ]
     if not etfs:
         raise GpwError("no ETF rows found — page structure may have changed")
     return etfs
+
+
+def _clean_etf_ticker(raw: str) -> str:
+    """Strip a GPW instrument-status marker sometimes appended to the ticker text.
+
+    Verified live (2026-09-18): a suspended/newly-listed leveraged ETN came
+    back as ``ETNVIRXRP  /Z`` — the status suffix (``/Z``) is plain text in
+    the same ``<b>`` tag as the ticker, separated only by extra whitespace,
+    not its own markup, so the row regex can't isolate it on its own. A raw
+    ticker with embedded spaces breaks the Yahoo symbol built from it
+    (``f"{ticker}.PL"``), so split on the first run of 2+ spaces and keep
+    only the leading token.
+    """
+    return re.split(r"\s{2,}", raw.strip())[0]
 
 
 def stock_to_symbol_record(stock: GpwStock) -> dict[str, str]:

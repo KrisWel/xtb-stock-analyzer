@@ -59,6 +59,21 @@ def test_parse_etfs_raises_on_empty_or_unrecognised_html():
         parse_etfs("<html><body>nothing here</body></html>")
 
 
+def test_parse_etfs_strips_a_status_marker_appended_to_the_ticker_text():
+    # verified live (2026-09-18): a suspended/newly-listed ETN's ticker came
+    # back as "ETNVIRXRP  /Z" — the "/Z" status suffix is plain text in the
+    # same <b> tag, separated only by extra whitespace, not its own markup
+    html = (
+        '<tr><td><a href="etf?isin=SE0021486156"><b>ETNVIRXRP  /Z</b></a></td>'
+        '<td id="id_ISIN">SE0021486156</td><td id="id_Waluta">PLN</td></tr>'
+    )
+
+    etfs = parse_etfs(html)
+
+    assert len(etfs) == 1
+    assert etfs[0].ticker == "ETNVIRXRP"
+
+
 def test_stock_to_symbol_record_is_pln_and_stock_category():
     stock = parse_stocks(_stocks_html())[0]
 

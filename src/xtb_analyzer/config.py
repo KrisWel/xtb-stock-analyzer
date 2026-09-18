@@ -42,6 +42,12 @@ GPW_OHLCV_DIR = DATA_DIR / "gpw_ohlcv"
 GPW_IDENTITY_MAP_CSV = DATA_DIR / "gpw_identity_map.csv"
 GPW_TECHNICALS_CSV = DATA_DIR / "gpw_technicals.csv"
 
+#: Stage 6 — buy/hold/sell verdicts, one CSV per universe (same naming
+#: convention as the other per-universe outputs above).
+GPW_SCORES_CSV = DATA_DIR / "gpw_scores.csv"
+US_STOCKS_SCORES_CSV = DATA_DIR / "us_stocks_scores.csv"
+SCORES_CSV = DATA_DIR / "scores.csv"
+
 WS_URLS = {
     "demo": "wss://ws.xtb.com/demo",
     "real": "wss://ws.xtb.com/real",

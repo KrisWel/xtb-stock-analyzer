@@ -15,6 +15,7 @@ from .gpw import IsinEntry
 from .identity import IdentityMapping
 from .market_data import Bar
 from .models import Instrument
+from .scoring import Score
 from .sec_edgar import CikEntry
 from .technicals import Technicals
 
@@ -249,6 +250,37 @@ def _row_to_technicals(row: dict[str, str]) -> Technicals:
         raw = row.get(column, "")
         values[column] = float(raw) if raw else None
     return Technicals(**values)
+
+
+def write_scores(rows: Iterable[Score], path: Path) -> Path:
+    """Write one CSV row of buy/hold/sell verdicts per instrument."""
+    rows = list(rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=Score.csv_columns())
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row.as_dict())
+    return path
+
+
+def read_scores(path: Path) -> list[Score]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [_row_to_score(row) for row in csv.DictReader(handle)]
+
+
+def _row_to_score(row: dict[str, str]) -> Score:
+    fundamental_score = row.get("fundamental_score", "")
+    return Score(
+        symbol=row["symbol"],
+        date=row["date"],
+        close=float(row["close"]),
+        technical_score=float(row["technical_score"]),
+        fundamental_score=float(fundamental_score) if fundamental_score else None,
+        composite_score=float(row["composite_score"]),
+        verdict=row["verdict"],
+        rationale=row["rationale"],
+    )
 
 
 def _row_to_instrument(row: dict[str, str]) -> Instrument:
